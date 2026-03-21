@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using Microsoft.CodeAnalysis.PooledObjects;
 using Roslyn.Utilities;
 
 using static System.Linq.ImmutableArrayExtensions;
@@ -201,26 +202,14 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             switch (symbol.Kind)
             {
                 case SymbolKind.NamedType:
+                case SymbolKind.ErrorType:
                     return ((NamedTypeSymbol)symbol).ConstructedFrom;
 
                 case SymbolKind.Method:
                     return ((MethodSymbol)symbol).ConstructedFrom;
 
                 default:
-                    throw ExceptionUtilities.UnexpectedValue(symbol.Kind);
-            }
-        }
-
-        public static bool IsSourceParameterWithEnumeratorCancellationAttribute(this ParameterSymbol parameter)
-        {
-            switch (parameter)
-            {
-                case SourceComplexParameterSymbolBase source:
-                    return source.HasEnumeratorCancellationAttribute;
-                case SynthesizedComplexParameterSymbol synthesized:
-                    return synthesized.HasEnumeratorCancellationAttribute;
-                default:
-                    return false;
+                    return symbol;
             }
         }
 
@@ -825,5 +814,35 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
         internal static bool ShouldCheckRequiredMembers(this MethodSymbol method)
             => method is { MethodKind: MethodKind.Constructor, HasSetsRequiredMembers: false };
+
+        internal static int GetOverloadResolutionPriority(this Symbol symbol)
+        {
+            Debug.Assert(symbol is MethodSymbol or PropertySymbol);
+            return symbol is MethodSymbol method ? method.OverloadResolutionPriority : ((PropertySymbol)symbol).OverloadResolutionPriority;
+        }
+
+        internal static bool IsExtensionParameter(this ParameterSymbol parameter)
+        {
+            return parameter.ContainingSymbol is NamedTypeSymbol { IsExtension: true };
+        }
+
+        internal static bool IsExtensionParameterImplementation(this ParameterSymbol parameter)
+        {
+            Debug.Assert(parameter.IsDefinition);
+            return parameter.ContainingSymbol is SourceExtensionImplementationMethodSymbol implementationMethod
+                && !implementationMethod.UnderlyingMethod.IsStatic
+                && parameter.Ordinal == 0;
+        }
+
+        internal static ImmutableArray<TypeWithAnnotations> GetAllTypeArgumentsNoUseSiteDiagnostics(this NamedTypeSymbol symbol)
+        {
+            var count = 0;
+            for (var current = symbol; current is not null; current = current.ContainingType)
+                count += current.TypeArgumentsWithAnnotationsNoUseSiteDiagnostics.Length;
+
+            var builder = ArrayBuilder<TypeWithAnnotations>.GetInstance(count);
+            symbol.GetAllTypeArgumentsNoUseSiteDiagnostics(builder);
+            return builder.ToImmutableAndFree();
+        }
     }
 }

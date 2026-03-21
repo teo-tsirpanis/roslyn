@@ -22,7 +22,7 @@ internal abstract partial class AbstractChangeNamespaceToMatchFolderCodeFixProvi
 {
     public override ImmutableArray<string> FixableDiagnosticIds => [IDEDiagnosticIds.MatchFolderAndNamespaceDiagnosticId];
 
-    public override Task RegisterCodeFixesAsync(CodeFixContext context)
+    public override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         var service = context.Document.Project.Solution.Services.GetRequiredService<ISupportedChangesService>();
         if (service.CanApplyChange(ApplyChangesKind.ChangeDocumentInfo))
@@ -31,16 +31,13 @@ internal abstract partial class AbstractChangeNamespaceToMatchFolderCodeFixProvi
                 CodeAction.Create(
                     AnalyzersResources.Change_namespace_to_match_folder_structure,
                     cancellationToken => FixAllInDocumentAsync(context.Document, context.Diagnostics,
-                    context.GetOptionsProvider(),
                     cancellationToken),
                     nameof(AnalyzersResources.Change_namespace_to_match_folder_structure)),
                 context.Diagnostics);
         }
-
-        return Task.CompletedTask;
     }
 
-    private static async Task<Solution> FixAllInDocumentAsync(Document document, ImmutableArray<Diagnostic> diagnostics, CodeActionOptionsProvider options, CancellationToken cancellationToken)
+    private static async Task<Solution> FixAllInDocumentAsync(Document document, ImmutableArray<Diagnostic> diagnostics, CancellationToken cancellationToken)
     {
         // All the target namespaces should be the same for a given document
         Debug.Assert(diagnostics.Select(diagnostic => diagnostic.Properties[MatchFolderAndNamespaceConstants.TargetNamespace]).Distinct().Count() == 1);
@@ -57,9 +54,6 @@ internal abstract partial class AbstractChangeNamespaceToMatchFolderCodeFixProvi
         var renameActionSet = await Renamer.RenameDocumentAsync(
             documentWithInvalidFolders,
             new DocumentRenameOptions(),
-#if !CODE_STYLE
-            options,
-#endif
             documentWithInvalidFolders.Name,
             newDocumentFolders: targetFolders,
             cancellationToken: cancellationToken).ConfigureAwait(false);

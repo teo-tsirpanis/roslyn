@@ -80,8 +80,8 @@ namespace Microsoft.CodeAnalysis.CSharp.UnitTests
                 Assert.False(symbol.IsDeclaredReadOnly);
                 Assert.False(symbol.IsMetadataNewSlot(true));
                 Assert.False(symbol.IsMetadataNewSlot(false));
-                Assert.False(symbol.IsMetadataVirtual(true));
-                Assert.False(symbol.IsMetadataVirtual(false));
+                Assert.False(symbol.IsMetadataVirtual(MethodSymbol.IsMetadataVirtualOption.IgnoreInterfaceImplementationChanges));
+                Assert.False(symbol.IsMetadataVirtual(MethodSymbol.IsMetadataVirtualOption.None));
 
                 Assert.Equal(symbol.IsVararg, symbol.CallingConvention.IsCallingConvention(CallingConvention.ExtraArguments));
 
@@ -111,6 +111,8 @@ namespace Microsoft.CodeAnalysis.CSharp.UnitTests
 
                 Assert.False(symbol.IsDiscard);
                 Assert.False(symbol.IsParams);
+                Assert.False(symbol.IsParamsArray);
+                Assert.False(symbol.IsParamsCollection);
                 Assert.False(symbol.IsMetadataOptional);
                 Assert.False(symbol.IsIDispatchConstant);
                 Assert.False(symbol.IsIUnknownConstant);
@@ -238,13 +240,13 @@ namespace Microsoft.CodeAnalysis.CSharp.UnitTests
                 var signature = ptrType.Signature;
                 for (int i = 0; i < paramSyntaxes.Count - 1; i++)
                 {
-                    var paramSyntax = paramSyntaxes[i].Type!;
+                    var paramSyntax = paramSyntaxes[i].Type;
                     ITypeSymbol signatureParamType = signature.Parameters[i].Type;
                     assertEqualSemanticInformation(model, paramSyntax, signatureParamType);
                 }
 
                 var returnParam = paramSyntaxes[^1].Type;
-                assertEqualSemanticInformation(model, returnParam!, signature.ReturnType);
+                assertEqualSemanticInformation(model, returnParam, signature.ReturnType);
             }
 
             static void assertEqualSemanticInformation(SemanticModel model, TypeSyntax typeSyntax, ITypeSymbol signatureType)
@@ -259,7 +261,7 @@ namespace Microsoft.CodeAnalysis.CSharp.UnitTests
 
                 if (typeSyntax is FunctionPointerTypeSyntax { ParameterList: { Parameters: var paramSyntaxes } })
                 {
-                    var paramPtrType = (IFunctionPointerTypeSymbol)semanticInfo.Type!;
+                    var paramPtrType = (IFunctionPointerTypeSymbol)semanticInfo.Type;
                     CommonVerifyFunctionPointer(paramPtrType.GetSymbol());
                     verifyNestedFunctionPointerSyntaxSemanticInfo(model, paramPtrType, paramSyntaxes);
                 }

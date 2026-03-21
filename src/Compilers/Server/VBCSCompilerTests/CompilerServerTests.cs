@@ -6,16 +6,12 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
 using System.Threading.Tasks;
 using Basic.Reference.Assemblies;
-using Castle.Core.Resource;
 using Microsoft.CodeAnalysis.CommandLine;
 using Microsoft.CodeAnalysis.Test.Utilities;
 using Roslyn.Test.Utilities;
@@ -117,35 +113,6 @@ End Module")
             }
         }
 
-        private static T ApplyEnvironmentVariables<T>(
-            IEnumerable<KeyValuePair<string, string>> environmentVariables,
-            Func<T> func)
-        {
-            if (environmentVariables == null)
-            {
-                return func();
-            }
-
-            var resetVariables = new Dictionary<string, string>();
-            try
-            {
-                foreach (var variable in environmentVariables)
-                {
-                    resetVariables.Add(variable.Key, Environment.GetEnvironmentVariable(variable.Key));
-                    Environment.SetEnvironmentVariable(variable.Key, variable.Value);
-                }
-
-                return func();
-            }
-            finally
-            {
-                foreach (var variable in resetVariables)
-                {
-                    Environment.SetEnvironmentVariable(variable.Key, variable.Value);
-                }
-            }
-        }
-
         private static (T Result, string Output) UseTextWriter<T>(Encoding encoding, Func<TextWriter, T> func)
         {
             MemoryStream memoryStream;
@@ -200,7 +167,7 @@ End Module")
                 clientDir: Path.GetDirectoryName(typeof(CommonCompiler).Assembly.Location),
                 workingDir: currentDirectory.Path,
                 sdkDir: sdkDir,
-                tempDir: BuildServerConnection.GetTempPath(currentDirectory.Path));
+                tempDir: Path.GetTempPath());
 
             var (result, output) = UseTextWriter(redirectEncoding, writer => ApplyEnvironmentVariables(additionalEnvironmentVars, () => client.RunCompilation(arguments, buildPaths, writer)));
             Assert.Equal(shouldRunOnServer, result.RanOnServer);
@@ -1243,8 +1210,8 @@ End Module
         [Trait(Traits.Environment, Traits.Environments.VSProductInstall)]
         public async Task AssemblyIdentityComparer1()
         {
-            _tempDirectory.CreateFile("mscorlib20.dll").WriteAllBytes(TestMetadata.ResourcesNet20.mscorlib);
-            _tempDirectory.CreateFile("mscorlib40.dll").WriteAllBytes(TestMetadata.ResourcesNet40.mscorlib);
+            _tempDirectory.CreateFile("mscorlib20.dll").WriteAllBytes(Net20.Resources.mscorlib);
+            _tempDirectory.CreateFile("mscorlib40.dll").WriteAllBytes(Net40.Resources.mscorlib);
 
             // Create DLL "lib.dll"
             Dictionary<string, string> files =

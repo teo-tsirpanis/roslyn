@@ -9,14 +9,14 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.CodeActions;
-using Microsoft.CodeAnalysis.CodeGeneration;
 using Microsoft.CodeAnalysis.CodeRefactorings;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.LanguageService;
 using Microsoft.CodeAnalysis.Operations;
-using Microsoft.CodeAnalysis.Shared.Collections;
 using Microsoft.CodeAnalysis.Shared.Extensions;
+using Microsoft.CodeAnalysis.Threading;
 using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.IntroduceParameter;
@@ -78,6 +78,11 @@ internal abstract partial class AbstractIntroduceParameterCodeRefactoringProvide
         if (expressionSymbol is IParameterSymbol parameterSymbol && parameterSymbol.ContainingSymbol.Equals(containingSymbol))
             return;
 
+        // Direct reference to named type or type parameter.  e.g. `$$Console.WriteLine()` or `T.Add(...)`.  These 
+        // are effectively statics (not values) and cannot become parameter.
+        if (expressionSymbol is INamedTypeSymbol or ITypeParameterSymbol)
+            return;
+
         // Code actions for trampoline and overloads will not be offered if the method is a constructor.
         // Code actions for overloads will not be offered if the method if the method is a local function.
         var methodKind = methodSymbol.MethodKind;
@@ -87,7 +92,7 @@ internal abstract partial class AbstractIntroduceParameterCodeRefactoringProvide
         if (IsDestructor(methodSymbol))
             return;
 
-        var actions = await GetActionsAsync(document, expression, methodSymbol, containingMethod, context.Options, cancellationToken).ConfigureAwait(false);
+        var actions = await GetActionsAsync(document, expression, methodSymbol, containingMethod, cancellationToken).ConfigureAwait(false);
         if (actions is null)
             return;
 
@@ -124,6 +129,16 @@ internal abstract partial class AbstractIntroduceParameterCodeRefactoringProvide
         if (syntaxFacts.IsNameOfAnyMemberAccessExpression(expression))
             return false;
 
+        // Need to special case for the left-hand side of member initializers in regular objects (e.g., 'X' in 'new Foo { X = ... }')
+        // because it does not make sense to introduce a parameter for the property/member name itself.
+        if (syntaxFacts.IsMemberInitializerNamedAssignmentIdentifier(expression, out _))
+            return false;
+
+        // Need to special case for the left-hand side of member initializers in anonymous objects (e.g., 'a' in 'new { a = ... }').
+        // This checks if the expression is the name identifier in an anonymous object member declarator.
+        if (syntaxFacts.IsAnonymousObjectMemberDeclaratorNameIdentifier(expression))
+            return false;
+
         // Need to special case for expressions that are contained within a parameter or attribute argument
         // because it is technically "contained" within a method, but does not make
         // sense to introduce.
@@ -137,7 +152,7 @@ internal abstract partial class AbstractIntroduceParameterCodeRefactoringProvide
     /// is a constructor.
     /// </summary>
     private async Task<(ImmutableArray<CodeAction> actions, ImmutableArray<CodeAction> actionsAllOccurrences)?> GetActionsAsync(Document document,
-        TExpressionSyntax expression, IMethodSymbol methodSymbol, SyntaxNode containingMethod, CodeGenerationOptionsProvider fallbackOptions,
+        TExpressionSyntax expression, IMethodSymbol methodSymbol, SyntaxNode containingMethod,
         CancellationToken cancellationToken)
     {
         var (shouldDisplay, containsClassExpression) = await ShouldExpressionDisplayCodeActionAsync(
@@ -183,7 +198,7 @@ internal abstract partial class AbstractIntroduceParameterCodeRefactoringProvide
         {
             return CodeAction.Create(
                 actionName,
-                cancellationToken => IntroduceParameterAsync(document, expression, methodSymbol, containingMethod, methodCallSites, allOccurrences, selectedCodeAction, fallbackOptions, cancellationToken),
+                cancellationToken => IntroduceParameterAsync(document, expression, methodSymbol, containingMethod, methodCallSites, allOccurrences, selectedCodeAction, cancellationToken),
                 actionName);
         }
     }
@@ -235,23 +250,32 @@ internal abstract partial class AbstractIntroduceParameterCodeRefactoringProvide
     /// </summary>
     private async Task<Solution> IntroduceParameterAsync(Document originalDocument, TExpressionSyntax expression,
         IMethodSymbol methodSymbol, SyntaxNode containingMethod, Dictionary<Document, List<TExpressionSyntax>> methodCallSites, bool allOccurrences, IntroduceParameterCodeActionKind selectedCodeAction,
-        CodeGenerationOptionsProvider fallbackOptions, CancellationToken cancellationToken)
+        CancellationToken cancellationToken)
     {
         var modifiedSolution = originalDocument.Project.Solution;
         var rewriter = new IntroduceParameterDocumentRewriter(this, originalDocument,
-            expression, methodSymbol, containingMethod, selectedCodeAction, fallbackOptions, allOccurrences);
+            expression, methodSymbol, containingMethod, selectedCodeAction, allOccurrences);
 
-        foreach (var (project, projectCallSites) in methodCallSites.GroupBy(kvp => kvp.Key.Project))
-        {
-            var compilation = await project.GetRequiredCompilationAsync(cancellationToken).ConfigureAwait(false);
-            foreach (var (document, invocations) in projectCallSites)
+        var changedRoots = await ProducerConsumer<(DocumentId documentId, SyntaxNode newRoot)>.RunParallelAsync(
+            source: methodCallSites.GroupBy(kvp => kvp.Key.Project),
+            produceItems: static async (tuple, callback, rewriter, cancellationToken) =>
             {
-                var newRoot = await rewriter.RewriteDocumentAsync(compilation, document, invocations, cancellationToken).ConfigureAwait(false);
-                modifiedSolution = modifiedSolution.WithDocumentSyntaxRoot(document.Id, newRoot);
-            }
-        }
+                var (project, projectCallSites) = tuple;
+                var compilation = await project.GetRequiredCompilationAsync(cancellationToken).ConfigureAwait(false);
+                await Parallel.ForEachAsync(
+                    projectCallSites,
+                    cancellationToken,
+                    async (tuple, cancellationToken) =>
+                    {
+                        var (document, invocations) = tuple;
+                        var newRoot = await rewriter.RewriteDocumentAsync(compilation, document, invocations, cancellationToken).ConfigureAwait(false);
+                        callback((document.Id, newRoot));
+                    }).ConfigureAwait(false);
+            },
+            args: rewriter,
+            cancellationToken).ConfigureAwait(false);
 
-        return modifiedSolution;
+        return modifiedSolution.WithDocumentSyntaxRoots(changedRoots);
     }
 
     /// <summary>

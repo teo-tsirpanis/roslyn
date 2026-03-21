@@ -3,7 +3,6 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
@@ -166,16 +165,26 @@ namespace Microsoft.CodeAnalysis
 
         /// <summary>
         /// Gets the locations where the symbol was originally defined, either in source or
-        /// metadata. Some symbols (for example, partial classes) may be defined in more than one
-        /// location.
+        /// metadata. Some symbols (for example, partial types such as classes, structs, and interfaces) may be defined in more than one
+        /// location. Note that for partial members (such as methods, properties, and events), this property returns
+        /// only one location. To get all locations for a partial member, use the <c>PartialDefinitionPart</c> and
+        /// <c>PartialImplementationPart</c> properties on <see cref="IMethodSymbol"/>, <see cref="IPropertySymbol"/>, or
+        /// <see cref="IEventSymbol"/>.
         /// </summary>
         ImmutableArray<Location> Locations { get; }
 
         /// <summary>
         /// Get the syntax node(s) where this symbol was declared in source. Some symbols (for example,
-        /// partial classes) may be defined in more than one location. This property should return
+        /// partial types such as classes, structs, and interfaces) may be defined in more than one location. This property should return
         /// one or more syntax nodes only if the symbol was declared in source code and also was
         /// not implicitly declared (see the IsImplicitlyDeclared property). 
+        /// 
+        /// <para>
+        /// Note that for partial members (methods, properties, events), this property returns only one
+        /// syntax node. To get all syntax nodes for a partial member, use the <c>PartialDefinitionPart</c> and
+        /// <c>PartialImplementationPart</c> properties on <see cref="IMethodSymbol"/>, <see cref="IPropertySymbol"/>, or
+        /// <see cref="IEventSymbol"/>.
+        /// </para>
         /// 
         /// <para>
         /// Note that for namespace symbol, the declaring syntax might be declaring a nested namespace.
@@ -191,7 +200,7 @@ namespace Microsoft.CodeAnalysis
         ImmutableArray<SyntaxReference> DeclaringSyntaxReferences { get; }
 
         /// <summary>
-        /// Gets the attributes for the symbol. Returns an empty <see cref="IEnumerable{ISymbolAttribute}"/>
+        /// Gets the attributes for the symbol. Returns an empty <see cref="ImmutableArray{AttributeData}"/>
         /// if there are no attributes.
         /// </summary>
         ImmutableArray<AttributeData> GetAttributes();

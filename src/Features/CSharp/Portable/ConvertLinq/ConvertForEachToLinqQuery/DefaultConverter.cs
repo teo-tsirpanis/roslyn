@@ -2,41 +2,38 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-#nullable disable
-
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using Microsoft.CodeAnalysis.ConvertLinq.ConvertForEachToLinqQuery;
-using Microsoft.CodeAnalysis.CSharp.Extensions;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.Formatting;
 
 namespace Microsoft.CodeAnalysis.CSharp.ConvertLinq.ConvertForEachToLinqQuery;
 
+using static SyntaxFactory;
+
 internal sealed class DefaultConverter(ForEachInfo<ForEachStatementSyntax, StatementSyntax> forEachInfo) : AbstractConverter(forEachInfo)
 {
-    private static readonly TypeSyntax VarNameIdentifier = SyntaxFactory.IdentifierName("var");
+    private static readonly TypeSyntax s_varNameIdentifier = IdentifierName("var");
 
     public override void Convert(SyntaxEditor editor, bool convertToQuery, CancellationToken cancellationToken)
     {
         // Filter out identifiers which are not used in statements.
         var variableNamesReadInside = new HashSet<string>(ForEachInfo.Statements
-            .SelectMany(statement => ForEachInfo.SemanticModel.AnalyzeDataFlow(statement).ReadInside).Select(symbol => symbol.Name));
+            .SelectMany(statement => ForEachInfo.SemanticModel.AnalyzeDataFlow(statement)!.ReadInside).Select(symbol => symbol.Name));
         var identifiersUsedInStatements = ForEachInfo.Identifiers
             .Where(identifier => variableNamesReadInside.Contains(identifier.ValueText));
 
-        // If there is a single statement and it is a block, leave it as is.
-        // Otherwise, wrap with a block.
-        var block = WrapWithBlockIfNecessary(
-            ForEachInfo.Statements.SelectAsArray(statement => statement.KeepCommentsAndAddElasticMarkers()));
-
         editor.ReplaceNode(
             ForEachInfo.ForEachStatement,
-            CreateDefaultReplacementStatement(identifiersUsedInStatements, block, convertToQuery)
-                .WithAdditionalAnnotations(Formatter.Annotation));
+            CreateDefaultReplacementStatement(
+                identifiersUsedInStatements,
+                // If there is a single statement and it is a block, leave it as is. Otherwise, wrap with a block.
+                WrapWithBlockIfNecessary(ForEachInfo.Statements),
+                convertToQuery).WithAdditionalAnnotations(Formatter.Annotation));
     }
 
     private StatementSyntax CreateDefaultReplacementStatement(
@@ -48,11 +45,11 @@ internal sealed class DefaultConverter(ForEachInfo<ForEachStatementSyntax, State
         if (identifiersCount == 0)
         {
             // Generate foreach(var _ ... select new {})
-            return SyntaxFactory.ForEachStatement(
-                VarNameIdentifier,
-                SyntaxFactory.Identifier("_"),
+            return ForEachStatement(
+                s_varNameIdentifier,
+                Identifier("_"),
                 CreateQueryExpressionOrLinqInvocation(
-                    SyntaxFactory.AnonymousObjectCreationExpression(),
+                    AnonymousObjectCreationExpression(),
                     [],
                     [],
                     convertToQuery),
@@ -61,11 +58,11 @@ internal sealed class DefaultConverter(ForEachInfo<ForEachStatementSyntax, State
         else if (identifiersCount == 1)
         {
             // Generate foreach(var singleIdentifier from ... select singleIdentifier)
-            return SyntaxFactory.ForEachStatement(
-                VarNameIdentifier,
+            return ForEachStatement(
+                s_varNameIdentifier,
                 identifiers.Single(),
                 CreateQueryExpressionOrLinqInvocation(
-                    SyntaxFactory.IdentifierName(identifiers.Single()),
+                    IdentifierName(identifiers.Single()),
                     [],
                     [],
                     convertToQuery),
@@ -73,16 +70,16 @@ internal sealed class DefaultConverter(ForEachInfo<ForEachStatementSyntax, State
         }
         else
         {
-            var tupleForSelectExpression = SyntaxFactory.TupleExpression(
+            var tupleForSelectExpression = TupleExpression(
                 [.. identifiers.Select(
-                    identifier => SyntaxFactory.Argument(SyntaxFactory.IdentifierName(identifier)))]);
-            var declaration = SyntaxFactory.DeclarationExpression(
-                VarNameIdentifier,
-                SyntaxFactory.ParenthesizedVariableDesignation(
-                    [.. identifiers.Select(SyntaxFactory.SingleVariableDesignation)]));
+                    identifier => Argument(IdentifierName(identifier)))]);
+            var declaration = DeclarationExpression(
+                s_varNameIdentifier,
+                ParenthesizedVariableDesignation(
+                    [.. identifiers.Select(SingleVariableDesignation)]));
 
             // Generate foreach(var (a,b) ... select (a, b))
-            return SyntaxFactory.ForEachVariableStatement(
+            return ForEachVariableStatement(
                 declaration,
                 CreateQueryExpressionOrLinqInvocation(
                     tupleForSelectExpression,
@@ -94,5 +91,5 @@ internal sealed class DefaultConverter(ForEachInfo<ForEachStatementSyntax, State
     }
 
     private static BlockSyntax WrapWithBlockIfNecessary(ImmutableArray<StatementSyntax> statements)
-        => statements is [BlockSyntax block] ? block : SyntaxFactory.Block(statements);
+        => statements is [BlockSyntax block] ? block : Block(statements);
 }

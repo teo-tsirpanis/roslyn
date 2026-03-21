@@ -35,7 +35,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             RefKind refKind,
             SyntaxToken identifier,
             int ordinal,
-            bool isParams,
+            bool hasParamsModifier,
             bool isExtensionMethodThis,
             bool addRefReadOnlyModifier,
             ScopedKind scope,
@@ -44,9 +44,9 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             Debug.Assert(owner is not LambdaSymbol); // therefore we don't need to deal with discard parameters
 
             var name = identifier.ValueText;
-            var location = new SourceLocation(identifier);
+            var location = new SourceLocation(name == "" ? syntax.Type : identifier);
 
-            if (isParams)
+            if (hasParamsModifier && parameterType.IsSZArray())
             {
                 // touch the constructor in order to generate proper use-site diagnostics
                 Binder.ReportUseSiteDiagnosticForSynthesizedAttribute(context.Compilation,
@@ -69,18 +69,20 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                     name,
                     location,
                     syntax.GetReference(),
-                    isParams,
+                    hasParamsModifier: hasParamsModifier,
+                    isParams: hasParamsModifier,
                     isExtensionMethodThis,
                     scope);
             }
 
-            if (!isParams &&
+            if (!hasParamsModifier &&
                 !isExtensionMethodThis &&
                 (syntax.Default == null) &&
                 (syntax.AttributeLists.Count == 0) &&
-                !owner.IsPartialMethod())
+                !owner.IsPartialMember() &&
+                scope == ScopedKind.None)
             {
-                return new SourceSimpleParameterSymbol(owner, parameterType, ordinal, refKind, scope, name, location);
+                return new SourceSimpleParameterSymbol(owner, parameterType, ordinal, refKind, name, location);
             }
 
             return new SourceComplexParameterSymbol(
@@ -91,7 +93,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 name,
                 location,
                 syntax.GetReference(),
-                isParams,
+                hasParamsModifier: hasParamsModifier,
+                isParams: hasParamsModifier,
                 isExtensionMethodThis,
                 scope);
         }
@@ -105,7 +108,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             Location location)
             : base(owner, ordinal)
         {
-            Debug.Assert((owner.Kind == SymbolKind.Method) || (owner.Kind == SymbolKind.Property));
+            Debug.Assert((owner.Kind == SymbolKind.Method) || (owner.Kind == SymbolKind.Property) || owner is NamedTypeSymbol { IsExtension: true });
             _refKind = refKind;
             _scope = scope;
             _name = name;
@@ -133,7 +136,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                     _name,
                     _location,
                     this.SyntaxReference,
-                    newIsParams,
+                    hasParamsModifier: HasParamsModifier,
+                    isParams: newIsParams,
                     this.IsExtensionMethodThis,
                     this.DeclaredScope);
             }
@@ -150,7 +154,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 _name,
                 _location,
                 this.SyntaxReference,
-                newIsParams,
+                hasParamsModifier: HasParamsModifier,
+                isParams: newIsParams,
                 this.IsExtensionMethodThis,
                 this.DeclaredScope);
         }
@@ -218,16 +223,32 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         /// <summary>
         /// The declared scope. From source, this is from the <c>scope</c> keyword only.
         /// </summary>
-        internal ScopedKind DeclaredScope => _scope;
+        internal sealed override ScopedKind DeclaredScope => _scope;
+
+        /// <summary>
+        /// Reflects presence of `params` modifier in source
+        /// </summary>
+        protected abstract bool HasParamsModifier { get; }
 
         internal abstract override ScopedKind EffectiveScope { get; }
 
         protected ScopedKind CalculateEffectiveScopeIgnoringAttributes()
         {
             var declaredScope = this.DeclaredScope;
-            return declaredScope == ScopedKind.None && ParameterHelpers.IsRefScopedByDefault(this) ?
-                ScopedKind.ScopedRef :
-                declaredScope;
+
+            if (declaredScope == ScopedKind.None)
+            {
+                if (ParameterHelpers.IsRefScopedByDefault(this))
+                {
+                    return ScopedKind.ScopedRef;
+                }
+                else if (HasParamsModifier && Type.IsRefLikeOrAllowsRefLikeType())
+                {
+                    return ScopedKind.ScopedValue;
+                }
+            }
+
+            return declaredScope;
         }
 
         internal sealed override bool UseUpdatedEscapeRules => ContainingModule.UseUpdatedEscapeRules;

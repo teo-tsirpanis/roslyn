@@ -2,20 +2,22 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.FindSymbols.Finders;
 
-internal class EventSymbolReferenceFinder : AbstractMethodOrPropertyOrEventSymbolReferenceFinder<IEventSymbol>
+internal sealed class EventSymbolReferenceFinder : AbstractMethodOrPropertyOrEventSymbolReferenceFinder<IEventSymbol>
 {
     protected override bool CanFind(IEventSymbol symbol)
         => true;
 
-    protected sealed override ValueTask<ImmutableArray<ISymbol>> DetermineCascadedSymbolsAsync(
+    protected sealed override async ValueTask<ImmutableArray<ISymbol>> DetermineCascadedSymbolsAsync(
         IEventSymbol symbol,
         Solution solution,
         FindReferencesSearchOptions options,
@@ -30,28 +32,42 @@ internal class EventSymbolReferenceFinder : AbstractMethodOrPropertyOrEventSymbo
                                                         .WhereAsArray(n => symbol.Equals(n.AssociatedSymbol))
                                                         .CastArray<ISymbol>();
 
-        return new(backingFields.Concat(associatedNamedTypes));
+        return [.. GetOtherPartsOfPartial(symbol), .. backingFields, .. associatedNamedTypes];
     }
 
-    protected sealed override async Task<ImmutableArray<Document>> DetermineDocumentsToSearchAsync(
+    private static ImmutableArray<ISymbol> GetOtherPartsOfPartial(IEventSymbol symbol)
+    {
+        if (symbol.PartialDefinitionPart != null)
+            return [symbol.PartialDefinitionPart];
+
+        if (symbol.PartialImplementationPart != null)
+            return [symbol.PartialImplementationPart];
+
+        return [];
+    }
+
+    protected sealed override async Task DetermineDocumentsToSearchAsync<TData>(
         IEventSymbol symbol,
         HashSet<string>? globalAliases,
         Project project,
         IImmutableSet<Document>? documents,
+        Action<Document, TData> processResult,
+        TData processResultData,
         FindReferencesSearchOptions options,
         CancellationToken cancellationToken)
     {
-        var documentsWithName = await FindDocumentsAsync(project, documents, cancellationToken, symbol.Name).ConfigureAwait(false);
-        var documentsWithGlobalAttributes = await FindDocumentsWithGlobalSuppressMessageAttributeAsync(project, documents, cancellationToken).ConfigureAwait(false);
-        return documentsWithName.Concat(documentsWithGlobalAttributes);
+        await FindDocumentsAsync(project, documents, processResult, processResultData, cancellationToken, symbol.Name).ConfigureAwait(false);
+        await FindDocumentsWithGlobalSuppressMessageAttributeAsync(project, documents, processResult, processResultData, cancellationToken).ConfigureAwait(false);
     }
 
-    protected sealed override ValueTask<ImmutableArray<FinderLocation>> FindReferencesInDocumentAsync(
+    protected sealed override void FindReferencesInDocument<TData>(
         IEventSymbol symbol,
         FindReferencesDocumentState state,
+        Action<FinderLocation, TData> processResult,
+        TData processResultData,
         FindReferencesSearchOptions options,
         CancellationToken cancellationToken)
     {
-        return FindReferencesInDocumentUsingSymbolNameAsync(symbol, state, cancellationToken);
+        FindReferencesInDocumentUsingSymbolName(symbol, state, processResult, processResultData, cancellationToken);
     }
 }

@@ -20,18 +20,14 @@ using Microsoft.CodeAnalysis.Shared.Extensions;
 namespace Microsoft.CodeAnalysis.CSharp.NewLines.ConstructorInitializerPlacement;
 
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = PredefinedCodeFixProviderNames.ConstructorInitializerPlacement), Shared]
-internal sealed class ConstructorInitializerPlacementCodeFixProvider : CodeFixProvider
+[method: ImportingConstructor]
+[method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
+internal sealed class ConstructorInitializerPlacementCodeFixProvider() : CodeFixProvider
 {
-    [ImportingConstructor]
-    [Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
-    public ConstructorInitializerPlacementCodeFixProvider()
-    {
-    }
-
     public override ImmutableArray<string> FixableDiagnosticIds
         => [IDEDiagnosticIds.ConstructorInitializerPlacementDiagnosticId];
 
-    public override Task RegisterCodeFixesAsync(CodeFixContext context)
+    public override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         var document = context.Document;
         var diagnostic = context.Diagnostics.First();
@@ -41,7 +37,6 @@ internal sealed class ConstructorInitializerPlacementCodeFixProvider : CodeFixPr
                 c => UpdateDocumentAsync(document, [diagnostic], c),
                 nameof(CSharpCodeFixesResources.Place_token_on_following_line)),
             context.Diagnostics);
-        return Task.CompletedTask;
     }
 
     private static async Task<Document> UpdateDocumentAsync(

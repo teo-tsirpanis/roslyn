@@ -7,12 +7,15 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Composition;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis.Debugging;
+using Microsoft.CodeAnalysis.ErrorReporting;
 using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.Host.Mef;
 using Microsoft.CodeAnalysis.MetadataAsSource;
@@ -61,7 +64,7 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
     /// generally run concurrently.  However, to be safe, we make this a concurrent dictionary to be safe to that
     /// potentially happening.
     /// </summary>
-    private readonly ConcurrentDictionary<string, SourceDocumentInfo> _fileToDocumentInfoMap = [];
+    private readonly ConcurrentDictionary<string, SourceDocumentInfo> _fileToDocumentInfoMap = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<MetadataAsSourceFile?> GetGeneratedFileAsync(
         MetadataAsSourceWorkspace metadataWorkspace,
@@ -166,9 +169,11 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
 
         ImmutableDictionary<string, string> pdbCompilationOptions;
         ImmutableArray<SourceDocument> sourceDocuments;
-        // We know we have a DLL, call and see if we can find metadata readers for it, and for the PDB (whereever it may be)
-        using (var documentDebugInfoReader = await _pdbFileLocatorService.GetDocumentDebugInfoReaderAsync(dllPath, options.AlwaysUseDefaultSymbolServers, telemetryMessage, cancellationToken).ConfigureAwait(false))
+
+        try
         {
+            // We know we have a DLL, call and see if we can find metadata readers for it, and for the PDB (wherever it may be)
+            using var documentDebugInfoReader = await _pdbFileLocatorService.GetDocumentDebugInfoReaderAsync(dllPath, options.AlwaysUseDefaultSymbolServers, telemetryMessage, cancellationToken).ConfigureAwait(false);
             if (documentDebugInfoReader is null)
                 return null;
 
@@ -179,19 +184,25 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
 
             // Try to find some actual document information from the PDB
             sourceDocuments = documentDebugInfoReader.FindSourceDocuments(handle);
-            if (sourceDocuments.Length == 0)
-            {
-                _logger?.Log(FeaturesResources.No_source_document_info_found_in_PDB);
-                return null;
-            }
+        }
+        catch (BadImageFormatException ex) when (FatalError.ReportAndCatch(ex))
+        {
+            _logger?.Log(ex.Message);
+            return null;
+        }
+
+        if (sourceDocuments.Length == 0)
+        {
+            _logger?.Log(FeaturesResources.No_source_document_info_found_in_PDB);
+            return null;
         }
 
         Encoding? defaultEncoding = null;
-        if (pdbCompilationOptions.TryGetValue(Cci.CompilationOptionNames.DefaultEncoding, out var encodingString))
+        if (pdbCompilationOptions.TryGetValue(CompilationOptionNames.DefaultEncoding, out var encodingString))
         {
             defaultEncoding = Encoding.GetEncoding(encodingString);
         }
-        else if (pdbCompilationOptions.TryGetValue(Cci.CompilationOptionNames.FallbackEncoding, out var fallbackEncodingString))
+        else if (pdbCompilationOptions.TryGetValue(CompilationOptionNames.FallbackEncoding, out var fallbackEncodingString))
         {
             defaultEncoding = Encoding.GetEncoding(fallbackEncodingString);
         }
@@ -215,6 +226,7 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
         }
 
         var tempFilePath = Path.Combine(tempPath, projectId.Id.ToString());
+
         // Create the directory. It's possible a parallel deletion is happening in another process, so we may have
         // to retry this a few times.
         var loopCount = 0;
@@ -222,7 +234,10 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
         {
             // Protect against infinite loops.
             if (loopCount++ > 10)
+            {
+                _logger?.Log(FeaturesResources.Unable_to_create_0, tempFilePath);
                 return null;
+            }
 
             IOUtilities.PerformIO(() => Directory.CreateDirectory(tempFilePath));
         }
@@ -237,12 +252,21 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
             return null;
 
         var symbolId = SymbolKey.Create(symbol, cancellationToken);
-        var navigateProject = metadataWorkspace.CurrentSolution.GetRequiredProject(projectId);
 
-        var documentInfos = CreateDocumentInfos(sourceFileInfos, encoding, navigateProject.Id, sourceWorkspace, sourceProject);
+        var navigateProject = metadataWorkspace.CurrentSolution.GetRequiredProject(projectId);
+        var documentInfos = CreateDocumentInfos(sourceFileInfos, encoding, projectId, sourceWorkspace, sourceProject);
         if (documentInfos.Length > 0)
         {
-            metadataWorkspace.OnDocumentsAdded(documentInfos);
+            foreach (var documentInfo in documentInfos)
+            {
+                // The document might have already been added by a previous go to definition call.
+                if (!metadataWorkspace.CurrentSolution.ContainsDocument(documentInfo.Id))
+                {
+                    metadataWorkspace.OnDocumentAdded(documentInfo);
+                }
+            }
+
+            // Get a new view of the project with the documents added.
             navigateProject = metadataWorkspace.CurrentSolution.GetRequiredProject(projectId);
         }
 
@@ -265,14 +289,14 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
             sourceDescription);
         var documentTooltip = navigateDocument.FilePath + Environment.NewLine + dllPath;
 
-        return new MetadataAsSourceFile(navigateDocument.FilePath, navigateLocation, documentName, documentTooltip);
+        return new MetadataAsSourceFile(navigateDocument.FilePath!, navigateLocation, documentName, documentTooltip);
     }
 
     private ProjectInfo? CreateProjectInfo(Workspace workspace, Project project, ImmutableDictionary<string, string> pdbCompilationOptions, string assemblyName, string assemblyVersion, SourceHashAlgorithm checksumAlgorithm)
     {
         // First we need the language name in order to get the services
         // TODO: Find language another way for non portable PDBs: https://github.com/dotnet/roslyn/issues/55834
-        if (!pdbCompilationOptions.TryGetValue(Cci.CompilationOptionNames.Language, out var languageName) || languageName is null)
+        if (!pdbCompilationOptions.TryGetValue(CompilationOptionNames.Language, out var languageName) || languageName is null)
         {
             _logger?.Log(FeaturesResources.Source_code_language_information_was_not_found_in_PDB);
             return null;
@@ -292,7 +316,7 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
                 name: $"{assemblyName} ({assemblyVersion})",
                 assemblyName: assemblyName,
                 language: languageName,
-                compilationOutputFilePaths: default,
+                compilationOutputInfo: default,
                 checksumAlgorithm: checksumAlgorithm),
             compilationOptions: compilationOptions,
             parseOptions: parseOptions,
@@ -312,20 +336,22 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
             }
 
             // If a document has multiple symbols then we might already know about it
-            if (_fileToDocumentInfoMap.ContainsKey(info.FilePath))
+            if (_fileToDocumentInfoMap.TryGetValue(info.FilePath, out var sourceDocumentInfo))
             {
+                documents.Add(sourceDocumentInfo.DocumentInfo);
                 continue;
             }
 
             var documentId = DocumentId.CreateNewId(projectId);
 
-            documents.Add(DocumentInfo.Create(
+            var documentInfo = DocumentInfo.Create(
                 documentId,
                 name: Path.GetFileName(info.FilePath),
                 loader: info.Loader,
                 filePath: info.FilePath,
                 isGenerated: true)
-                .WithDesignTimeOnly(true));
+                .WithDesignTimeOnly(true);
+            documents.Add(documentInfo);
 
             // If we successfully got something from SourceLink for this project then its nice to wait a bit longer
             // if the user performs subsequent navigation
@@ -335,49 +361,15 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
             }
 
             // In order to open documents in VS we need to understand the link from temp file to document and its encoding etc.
-            _fileToDocumentInfoMap[info.FilePath] = new(documentId, encoding, info.ChecksumAlgorithm, sourceProject.Id, sourceWorkspace);
+            _fileToDocumentInfoMap[info.FilePath] = new(documentId, encoding, info.ChecksumAlgorithm, sourceProject.Id, sourceWorkspace, documentInfo);
         }
 
-        return documents.ToImmutable();
-    }
-
-    private static void AssertIsMainThread(MetadataAsSourceWorkspace workspace)
-    {
-        Contract.ThrowIfNull(workspace);
-        var threadingService = workspace.Services.GetRequiredService<IWorkspaceThreadingServiceProvider>().Service;
-        Contract.ThrowIfFalse(threadingService.IsOnMainThread);
+        return documents.ToImmutableAndClear();
     }
 
     public bool ShouldCollapseOnOpen(MetadataAsSourceWorkspace workspace, string filePath, BlockStructureOptions blockStructureOptions)
     {
-        AssertIsMainThread(workspace);
         return _fileToDocumentInfoMap.TryGetValue(filePath, out _) && blockStructureOptions.CollapseMetadataImplementationsWhenFirstOpened;
-    }
-
-    public bool TryAddDocumentToWorkspace(MetadataAsSourceWorkspace workspace, string filePath, SourceTextContainer sourceTextContainer)
-    {
-        AssertIsMainThread(workspace);
-
-        if (_fileToDocumentInfoMap.TryGetValue(filePath, out var info))
-        {
-            workspace.OnDocumentOpened(info.DocumentId, sourceTextContainer);
-            return true;
-        }
-
-        return false;
-    }
-
-    public bool TryRemoveDocumentFromWorkspace(MetadataAsSourceWorkspace workspace, string filePath)
-    {
-        AssertIsMainThread(workspace);
-
-        if (_fileToDocumentInfoMap.TryGetValue(filePath, out var info))
-        {
-            workspace.OnDocumentClosed(info.DocumentId, new WorkspaceFileTextLoader(workspace.Services.SolutionServices, filePath, info.Encoding));
-            return true;
-        }
-
-        return false;
     }
 
     public Project? MapDocument(Document document)
@@ -418,8 +410,25 @@ internal sealed class PdbSourceDocumentMetadataAsSourceFileProvider(
         _sourceLinkEnabledProjects.Clear();
         _implementationAssemblyLookupService.Clear();
     }
+
+    internal TestAccessor GetTestAccessor()
+    {
+        return new TestAccessor(this);
+    }
+
+    internal readonly struct TestAccessor
+    {
+        private readonly PdbSourceDocumentMetadataAsSourceFileProvider _instance;
+
+        internal TestAccessor(PdbSourceDocumentMetadataAsSourceFileProvider instance)
+        {
+            _instance = instance;
+        }
+
+        public ImmutableDictionary<string, SourceDocumentInfo> Documents => _instance._fileToDocumentInfoMap.ToImmutableDictionary();
+    }
 }
 
 internal sealed record SourceDocument(string FilePath, SourceHashAlgorithm ChecksumAlgorithm, ImmutableArray<byte> Checksum, byte[]? EmbeddedTextBytes, string? SourceLinkUrl);
 
-internal record struct SourceDocumentInfo(DocumentId DocumentId, Encoding Encoding, SourceHashAlgorithm ChecksumAlgorithm, ProjectId SourceProjectId, Workspace SourceWorkspace);
+internal record struct SourceDocumentInfo(DocumentId DocumentId, Encoding Encoding, SourceHashAlgorithm ChecksumAlgorithm, ProjectId SourceProjectId, Workspace SourceWorkspace, DocumentInfo DocumentInfo);

@@ -11,7 +11,7 @@ public static class ClassificationTypeNames
     /// <summary>
     /// Additive classifications types supply additional context to other classifications.
     /// </summary>
-    public static ImmutableArray<string> AdditiveTypeNames { get; } = [StaticSymbol, ReassignedVariable, TestCode];
+    public static ImmutableArray<string> AdditiveTypeNames { get; } = [StaticSymbol, ReassignedVariable, ObsoleteSymbol, TestCode];
 
     public static ImmutableArray<string> AllTypeNames { get; } =
     [
@@ -28,6 +28,7 @@ public static class ClassificationTypeNames
         WhiteSpace,
         Text,
         ReassignedVariable,
+        ObsoleteSymbol,
         StaticSymbol,
         PreprocessorText,
         Punctuation,
@@ -42,6 +43,9 @@ public static class ClassificationTypeNames
         StructName,
         RecordStructName,
         TypeParameterName,
+        ArrayName,
+        PointerName,
+        FunctionPointerName,
         FieldName,
         EnumMemberName,
         ConstantName,
@@ -112,6 +116,7 @@ public static class ClassificationTypeNames
     public const string Text = "text";
 
     internal const string ReassignedVariable = "reassigned variable";
+    internal const string ObsoleteSymbol = "obsolete symbol";
     public const string StaticSymbol = "static symbol";
 
     public const string PreprocessorText = "preprocessor text";
@@ -128,6 +133,9 @@ public static class ClassificationTypeNames
     public const string StructName = "struct name";
     public const string RecordStructName = "record struct name";
     public const string TypeParameterName = "type parameter name";
+    internal const string ArrayName = "array name";
+    internal const string PointerName = "pointer name";
+    internal const string FunctionPointerName = "function pointer name";
 
     internal const string TestCode = "roslyn test code";
     internal const string TestCodeMarkdown = "roslyn test code markdown";

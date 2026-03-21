@@ -8,6 +8,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Text;
@@ -23,12 +24,12 @@ internal abstract class AbstractDocCommentCompletionProvider<TSyntax> : LSPCompl
     // Tag names
     private static readonly ImmutableArray<string> s_listTagNames = [ListHeaderElementName, TermElementName, ItemElementName, DescriptionElementName];
     private static readonly ImmutableArray<string> s_listHeaderTagNames = [TermElementName, DescriptionElementName];
-    private static readonly ImmutableArray<string> s_nestedTagNames = [CElementName, CodeElementName, ParaElementName, ListElementName];
+    private static readonly ImmutableArray<string> s_nestedTagNames = [CElementName, CodeElementName, ParaElementName, ListElementName, BElementName, EmElementName, IElementName, StrongElementName, TtElementName];
     private static readonly ImmutableArray<string> s_topLevelRepeatableTagNames = [ExceptionElementName, IncludeElementName, PermissionElementName];
     private static readonly ImmutableArray<string> s_topLevelSingleUseTagNames = [SummaryElementName, RemarksElementName, ExampleElementName, CompletionListElementName];
 
     private static readonly Dictionary<string, (string tagOpen, string textBeforeCaret, string textAfterCaret, string? tagClose)> s_tagMap =
-        new Dictionary<string, (string tagOpen, string textBeforeCaret, string textAfterCaret, string? tagClose)>()
+        new()
         {
             //                                        tagOpen                                  textBeforeCaret       $$  textAfterCaret                            tagClose
             { ExceptionElementName,              ($"<{ExceptionElementName}",              $" {CrefAttributeName}=\"",  "\"",                                      null) },
@@ -94,7 +95,7 @@ internal abstract class AbstractDocCommentCompletionProvider<TSyntax> : LSPCompl
 
     protected abstract IEnumerable<string?> GetExistingTopLevelAttributeValues(TSyntax syntax, string tagName, string attributeName);
 
-    protected abstract IEnumerable<string> GetKeywordNames();
+    protected abstract ImmutableArray<string> GetKeywordNames();
 
     /// <summary>
     /// A temporarily hack that should be removed once/if https://github.com/dotnet/roslyn/issues/53092 is fixed.
@@ -113,10 +114,14 @@ internal abstract class AbstractDocCommentCompletionProvider<TSyntax> : LSPCompl
         return CreateCompletionItem(name);
     }
 
-    protected IEnumerable<CompletionItem> GetAttributeItems(string tagName, ISet<string> existingAttributes)
+    protected IEnumerable<CompletionItem> GetAttributeItems(string tagName, ISet<string> existingAttributes, bool addEqualsAndQuotes)
     {
-        return s_attributeMap.Where(x => x.elementName == tagName && !existingAttributes.Contains(x.attributeName))
-                             .Select(x => CreateCompletionItem(x.attributeName, beforeCaretText: x.text, afterCaretText: "\""));
+        return s_attributeMap
+            .Where(x => x.elementName == tagName && !existingAttributes.Contains(x.attributeName))
+            .Select(x => CreateCompletionItem(
+                x.attributeName,
+                beforeCaretText: addEqualsAndQuotes ? x.text : x.text[..^2],
+                afterCaretText: addEqualsAndQuotes ? "\"" : ""));
     }
 
     protected IEnumerable<CompletionItem> GetAlwaysVisibleItems()
@@ -144,6 +149,11 @@ internal abstract class AbstractDocCommentCompletionProvider<TSyntax> : LSPCompl
         {
             items = items.Concat(GetParamRefItems(symbol))
                          .Concat(GetTypeParamRefItems(symbol));
+        }
+
+        if (symbol is { ContainingSymbol: INamedTypeSymbol { IsExtension: true } extension })
+        {
+            items = items.Concat(GetParamRefItems(extension));
         }
 
         if (includeKeywords)
@@ -203,7 +213,7 @@ internal abstract class AbstractDocCommentCompletionProvider<TSyntax> : LSPCompl
             return s_listTypeValues.Select(CreateCompletionItem);
         }
 
-        return SpecializedCollections.EmptyEnumerable<CompletionItem>();
+        return [];
     }
 
     protected ImmutableArray<CompletionItem> GetTopLevelItems(ISymbol? symbol, TSyntax syntax)
@@ -242,7 +252,7 @@ internal abstract class AbstractDocCommentCompletionProvider<TSyntax> : LSPCompl
             }
         }
 
-        return items.ToImmutable();
+        return items.ToImmutableAndClear();
     }
 
     protected IEnumerable<CompletionItem> GetItemTagItems()
@@ -278,6 +288,13 @@ internal abstract class AbstractDocCommentCompletionProvider<TSyntax> : LSPCompl
 
         var replacementText = beforeCaretText;
         var newPosition = replacementSpan.Start + beforeCaretText.Length;
+
+        if (text.Length > replacementSpan.End + 1
+            && text[replacementSpan.End] == '='
+            && text[replacementSpan.End + 1] == '"')
+        {
+            newPosition += 2;
+        }
 
         if (commitChar.HasValue && !char.IsWhiteSpace(commitChar.Value) && commitChar.Value != replacementText[^1])
         {

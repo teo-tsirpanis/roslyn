@@ -10,91 +10,122 @@ using Microsoft.CodeAnalysis.Operations;
 
 namespace Microsoft.CodeAnalysis.RemoveRedundantEquality;
 
-internal abstract class AbstractRemoveRedundantEqualityDiagnosticAnalyzer
-    : AbstractBuiltInCodeStyleDiagnosticAnalyzer
+internal abstract class AbstractRemoveRedundantEqualityDiagnosticAnalyzer(ISyntaxFacts syntaxFacts)
+    : AbstractBuiltInCodeStyleDiagnosticAnalyzer(
+        IDEDiagnosticIds.RemoveRedundantEqualityDiagnosticId,
+        EnforceOnBuildValues.RemoveRedundantEquality,
+        option: null,
+        new LocalizableResourceString(nameof(AnalyzersResources.Remove_redundant_equality), AnalyzersResources.ResourceManager, typeof(AnalyzersResources)))
 {
-    private readonly ISyntaxFacts _syntaxFacts;
-
-    protected AbstractRemoveRedundantEqualityDiagnosticAnalyzer(ISyntaxFacts syntaxFacts)
-        : base(IDEDiagnosticIds.RemoveRedundantEqualityDiagnosticId,
-               EnforceOnBuildValues.RemoveRedundantEquality,
-               option: null,
-               new LocalizableResourceString(nameof(AnalyzersResources.Remove_redundant_equality), AnalyzersResources.ResourceManager, typeof(AnalyzersResources)))
-    {
-        _syntaxFacts = syntaxFacts;
-    }
-
     public override DiagnosticAnalyzerCategory GetAnalyzerCategory()
         => DiagnosticAnalyzerCategory.SemanticSpanAnalysis;
 
     protected override void InitializeWorker(AnalysisContext context)
-        => context.RegisterOperationAction(AnalyzeBinaryOperator, OperationKind.BinaryOperator);
+    {
+        context.RegisterOperationAction(AnalyzeBinaryOperator, OperationKind.BinaryOperator);
+        context.RegisterOperationAction(AnalyzeIsPatternOperator, OperationKind.IsPattern);
+    }
+
+    private void AnalyzeIsPatternOperator(OperationAnalysisContext context)
+    {
+        if (ShouldSkipAnalysis(context, notification: null))
+            return;
+
+        var syntax = context.Operation.Syntax;
+        if (!syntaxFacts.IsIsPatternExpression(syntax))
+            return;
+
+        var operation = (IIsPatternOperation)context.Operation;
+        if (operation.Pattern is not IConstantPatternOperation { Value.ConstantValue.Value: true or false } constantPattern)
+            return;
+
+        syntaxFacts.GetPartsOfIsPatternExpression(syntax, out _, out var isToken, out _);
+        AnalyzeOperator(
+            context,
+            leftOperand: operation.Value,
+            rightOperand: constantPattern.Value,
+            isOperatorEquals: true,
+            isToken);
+    }
 
     private void AnalyzeBinaryOperator(OperationAnalysisContext context)
     {
         if (ShouldSkipAnalysis(context, notification: null))
             return;
 
+        var syntax = context.Operation.Syntax;
+        if (!syntaxFacts.IsBinaryExpression(syntax))
+            return;
+
+        // We shouldn't report diagnostic on overloaded operator as the behavior can change.
         var operation = (IBinaryOperation)context.Operation;
         if (operation.OperatorMethod is not null)
-        {
-            // We shouldn't report diagnostic on overloaded operator as the behavior can change.
             return;
-        }
 
         if (operation.OperatorKind is not (BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals))
-        {
             return;
-        }
-
-        if (!_syntaxFacts.IsBinaryExpression(operation.Syntax))
-        {
-            return;
-        }
-
-        var rightOperand = operation.RightOperand;
-        var leftOperand = operation.LeftOperand;
-
-        if (rightOperand.Type is null || leftOperand.Type is null)
-        {
-            return;
-        }
-
-        if (rightOperand.Type.SpecialType != SpecialType.System_Boolean ||
-            leftOperand.Type.SpecialType != SpecialType.System_Boolean)
-        {
-            return;
-        }
 
         var isOperatorEquals = operation.OperatorKind == BinaryOperatorKind.Equals;
-        _syntaxFacts.GetPartsOfBinaryExpression(operation.Syntax, out _, out var operatorToken, out _);
-        var properties = ImmutableDictionary.CreateBuilder<string, string?>();
-        if (TryGetLiteralValue(rightOperand) == isOperatorEquals)
+        syntaxFacts.GetPartsOfBinaryExpression(syntax, out _, out var operatorToken, out _);
+        AnalyzeOperator(
+            context,
+            operation.LeftOperand,
+            operation.RightOperand,
+            isOperatorEquals,
+            operatorToken);
+    }
+
+    private void AnalyzeOperator(
+        OperationAnalysisContext context,
+        IOperation leftOperand,
+        IOperation rightOperand,
+        bool isOperatorEquals,
+        SyntaxToken operatorToken)
+    {
+        var leftType = leftOperand.Type;
+        var rightType = rightOperand.Type;
+
+        if (leftType?.SpecialType != SpecialType.System_Boolean ||
+            rightType?.SpecialType != SpecialType.System_Boolean)
         {
-            properties.Add(RedundantEqualityConstants.RedundantSide, RedundantEqualityConstants.Right);
-        }
-        else if (TryGetLiteralValue(leftOperand) == isOperatorEquals)
-        {
-            properties.Add(RedundantEqualityConstants.RedundantSide, RedundantEqualityConstants.Left);
+            return;
         }
 
-        if (properties.Count == 1)
+        var properties = ImmutableDictionary.CreateBuilder<string, string?>();
+        if (TryGetLiteralValue(rightOperand) is bool rightBool)
         {
-            context.ReportDiagnostic(Diagnostic.Create(Descriptor,
-                operatorToken.GetLocation(),
-                additionalLocations: [operation.Syntax.GetLocation()],
-                properties: properties.ToImmutable()));
+            properties.Add(RedundantEqualityConstants.RedundantSide, RedundantEqualityConstants.Right);
+            if (rightBool != isOperatorEquals)
+                properties.Add(RedundantEqualityConstants.Negate, RedundantEqualityConstants.Negate);
         }
+        else if (TryGetLiteralValue(leftOperand) is bool leftBool)
+        {
+            properties.Add(RedundantEqualityConstants.RedundantSide, RedundantEqualityConstants.Left);
+            if (leftBool != isOperatorEquals)
+                properties.Add(RedundantEqualityConstants.Negate, RedundantEqualityConstants.Negate);
+        }
+        else
+        {
+            return;
+        }
+
+        context.ReportDiagnostic(Diagnostic.Create(Descriptor,
+            operatorToken.GetLocation(),
+            additionalLocations: [operatorToken.GetLocation()],
+            properties: properties.ToImmutable()));
 
         return;
 
-        static bool? TryGetLiteralValue(IOperation operand)
+        static bool? TryGetLiteralValue(IOperation? operand)
         {
             // Make sure we only simplify literals to avoid changing
             // something like the following example:
             // const bool Activated = true; ... if (state == Activated)
-            if (operand.ConstantValue.HasValue && operand.Kind == OperationKind.Literal &&
-                operand.ConstantValue.Value is bool constValue)
+            if (operand is
+                {
+                    Kind: OperationKind.Literal,
+                    ConstantValue: { HasValue: true, Value: bool constValue }
+                })
             {
                 return constValue;
             }

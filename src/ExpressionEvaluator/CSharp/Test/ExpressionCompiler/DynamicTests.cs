@@ -12,7 +12,6 @@ using System.Linq;
 using Microsoft.CodeAnalysis.CodeGen;
 using Microsoft.CodeAnalysis.CSharp.Symbols;
 using Microsoft.CodeAnalysis.CSharp.Test.Utilities;
-using Microsoft.CodeAnalysis.CSharp.UnitTests;
 using Microsoft.CodeAnalysis.Emit;
 using Microsoft.CodeAnalysis.ExpressionEvaluator;
 using Microsoft.CodeAnalysis.ExpressionEvaluator.UnitTests;
@@ -1258,6 +1257,10 @@ class C
     {
         System.Action a = () => Goo(x);
     }
+
+    static void Goo(int y)
+    {
+    }
 }
 ";
             var comp = CreateCompilation(source, new[] { CSharpRef }, TestOptions.DebugDll);
@@ -1368,6 +1371,9 @@ class C
     static void Goo(int x)
     {
         M(x);
+    }
+    static void Goo(string x)
+    {
     }
 }
 ";

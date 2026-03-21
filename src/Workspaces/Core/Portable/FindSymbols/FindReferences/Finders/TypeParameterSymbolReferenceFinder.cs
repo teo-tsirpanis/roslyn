@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Threading;
@@ -11,14 +12,22 @@ namespace Microsoft.CodeAnalysis.FindSymbols.Finders;
 
 internal sealed class TypeParameterSymbolReferenceFinder : AbstractTypeParameterSymbolReferenceFinder
 {
-    protected override bool CanFind(ITypeParameterSymbol symbol)
-        => symbol.TypeParameterKind != TypeParameterKind.Method;
+    public static readonly TypeParameterSymbolReferenceFinder Instance = new();
 
-    protected override Task<ImmutableArray<Document>> DetermineDocumentsToSearchAsync(
+    private TypeParameterSymbolReferenceFinder()
+    {
+    }
+
+    protected override bool CanFind(ITypeParameterSymbol symbol)
+        => symbol.TypeParameterKind == TypeParameterKind.Type;
+
+    protected override Task DetermineDocumentsToSearchAsync<TData>(
         ITypeParameterSymbol symbol,
         HashSet<string>? globalAliases,
         Project project,
         IImmutableSet<Document>? documents,
+        Action<Document, TData> processResult,
+        TData processResultData,
         FindReferencesSearchOptions options,
         CancellationToken cancellationToken)
     {
@@ -29,6 +38,8 @@ internal sealed class TypeParameterSymbolReferenceFinder : AbstractTypeParameter
         // parameter has a different name in different parts that we won't find it.  However,
         // this only happens in error situations.  It is not legal in C# to use a different
         // name for a type parameter in different parts.
-        return FindDocumentsAsync(project, documents, cancellationToken, symbol.Name, symbol.ContainingType.Name);
+        return symbol.ContainingType is { IsExtension: true, ContainingType.Name: var staticClassName }
+            ? FindDocumentsAsync(project, documents, processResult, processResultData, cancellationToken, symbol.Name, staticClassName)
+            : FindDocumentsAsync(project, documents, processResult, processResultData, cancellationToken, symbol.Name, symbol.ContainingType.Name);
     }
 }

@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections.Immutable;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.ErrorReporting;
@@ -15,7 +16,7 @@ namespace Microsoft.CodeAnalysis.FindSymbols;
 /// Wraps an <see cref="IFindReferencesProgress"/> into an <see cref="IStreamingFindReferencesProgress"/>
 /// so it can be used from the new streaming find references APIs.
 /// </summary>
-internal class StreamingFindReferencesProgressAdapter : IStreamingFindReferencesProgress
+internal sealed class StreamingFindReferencesProgressAdapter : IStreamingFindReferencesProgress
 {
     private readonly IFindReferencesProgress _progress;
 
@@ -24,39 +25,23 @@ internal class StreamingFindReferencesProgressAdapter : IStreamingFindReferences
     public StreamingFindReferencesProgressAdapter(IFindReferencesProgress progress)
     {
         _progress = progress;
-        ProgressTracker = new StreamingProgressTracker((current, max, ct) =>
+        ProgressTracker = new StreamingProgressTracker(async (current, max, ct) =>
         {
             _progress.ReportProgress(current, max);
-            return default;
         });
     }
 
-    public ValueTask OnCompletedAsync(CancellationToken cancellationToken)
+    public async ValueTask OnCompletedAsync(CancellationToken cancellationToken)
     {
         _progress.OnCompleted();
-        return default;
     }
 
-    public ValueTask OnFindInDocumentCompletedAsync(Document document, CancellationToken cancellationToken)
-    {
-        _progress.OnFindInDocumentCompleted(document);
-        return default;
-    }
-
-    public ValueTask OnFindInDocumentStartedAsync(Document document, CancellationToken cancellationToken)
-    {
-        _progress.OnFindInDocumentStarted(document);
-        return default;
-    }
-
-    public ValueTask OnDefinitionFoundAsync(SymbolGroup group, CancellationToken cancellationToken)
+    public async ValueTask OnDefinitionFoundAsync(SymbolGroup group, CancellationToken cancellationToken)
     {
         try
         {
             foreach (var symbol in group.Symbols)
                 _progress.OnDefinitionFound(symbol);
-
-            return default;
         }
         catch (Exception ex) when (FatalError.ReportAndPropagateUnlessCanceled(ex, cancellationToken))
         {
@@ -64,15 +49,14 @@ internal class StreamingFindReferencesProgressAdapter : IStreamingFindReferences
         }
     }
 
-    public ValueTask OnReferenceFoundAsync(SymbolGroup group, ISymbol symbol, ReferenceLocation location, CancellationToken cancellationToken)
+    public async ValueTask OnReferencesFoundAsync(ImmutableArray<(SymbolGroup group, ISymbol symbol, ReferenceLocation location)> references, CancellationToken cancellationToken)
     {
-        _progress.OnReferenceFound(symbol, location);
-        return default;
+        foreach (var (_, symbol, location) in references)
+            _progress.OnReferenceFound(symbol, location);
     }
 
-    public ValueTask OnStartedAsync(CancellationToken cancellationToken)
+    public async ValueTask OnStartedAsync(CancellationToken cancellationToken)
     {
         _progress.OnStarted();
-        return default;
     }
 }

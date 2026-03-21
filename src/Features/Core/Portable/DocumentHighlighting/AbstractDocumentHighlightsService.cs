@@ -53,7 +53,7 @@ internal abstract partial class AbstractDocumentHighlightsService :
                 return [];
             }
 
-            return await result.Value.SelectAsArrayAsync(h => h.RehydrateAsync(solution)).ConfigureAwait(false);
+            return await result.Value.SelectAsArrayAsync(h => h.RehydrateAsync(solution, cancellationToken)).ConfigureAwait(false);
         }
 
         return await GetDocumentHighlightsInCurrentProcessAsync(
@@ -63,7 +63,9 @@ internal abstract partial class AbstractDocumentHighlightsService :
     private async Task<ImmutableArray<DocumentHighlights>> GetDocumentHighlightsInCurrentProcessAsync(
         Document document, int position, IImmutableSet<Document> documentsToSearch, HighlightingOptions options, CancellationToken cancellationToken)
     {
-        var semanticModel = await document.GetRequiredSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        // Document highlights are not impacted by nullable analysis.  Get a semantic model with nullability disabled to
+        // lower the amount of work we need to do here.
+        var semanticModel = await document.GetRequiredNullableDisabledSemanticModelAsync(cancellationToken).ConfigureAwait(false);
         var result = TryGetEmbeddedLanguageHighlights(document, semanticModel, position, options, cancellationToken);
         if (!result.IsDefaultOrEmpty)
             return result;
@@ -94,7 +96,7 @@ internal abstract partial class AbstractDocumentHighlightsService :
     {
         var root = semanticModel.SyntaxTree.GetRoot(cancellationToken);
         var token = root.FindToken(position);
-        var embeddedHighlightsServices = this.GetServices(semanticModel, token, cancellationToken);
+        var (embeddedHighlightsServices, _) = this.GetServices(semanticModel, token, cancellationToken);
         foreach (var service in embeddedHighlightsServices)
         {
             var result = service.Value.GetDocumentHighlights(
@@ -166,9 +168,14 @@ internal abstract partial class AbstractDocumentHighlightsService :
         references = references.FilterNonMatchingMethodNames(solution, symbol);
         references = references.FilterToAliasMatches(symbol as IAliasSymbol);
 
-        if (symbol.IsConstructor())
+        if (symbol is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor)
         {
-            references = references.WhereAsArray(r => r.Definition.OriginalDefinition.Equals(symbol.OriginalDefinition));
+            var constructorParts1 = constructor.OriginalDefinition.GetAllMethodSymbolsOfPartialParts();
+            references = references.WhereAsArray(r =>
+            {
+                var constructorParts2 = ((IMethodSymbol)r.Definition).GetAllMethodSymbolsOfPartialParts();
+                return constructorParts1.Intersect(constructorParts2).Any();
+            });
         }
 
         using var _ = ArrayBuilder<Location>.GetInstance(out var additionalReferences);
@@ -263,13 +270,11 @@ internal abstract partial class AbstractDocumentHighlightsService :
             await AddLocationSpanAsync(location, solution, spanSet, tagMap, HighlightSpanKind.Reference, cancellationToken).ConfigureAwait(false);
         }
 
-        using var _1 = ArrayBuilder<DocumentHighlights>.GetInstance(tagMap.Count, out var list);
+        var list = new FixedSizeArrayBuilder<DocumentHighlights>(tagMap.Count);
         foreach (var kvp in tagMap)
-        {
             list.Add(new DocumentHighlights(kvp.Key, [.. kvp.Value]));
-        }
 
-        return list.ToImmutableAndClear();
+        return list.MoveToImmutable();
     }
 
     private static bool ShouldIncludeDefinition(ISymbol symbol)

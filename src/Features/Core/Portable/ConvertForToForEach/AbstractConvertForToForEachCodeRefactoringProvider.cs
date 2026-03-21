@@ -162,11 +162,8 @@ internal abstract class AbstractConvertForToForEachCodeRefactoringProvider<
                     if (argumentList is null)
                         return true;
 
-                    var arguments = syntaxFacts.GetArgumentsOfArgumentList(argumentList);
-                    // was used in a multi-dimensional indexing, or multiple argument method call.  Can't convert this.
-                    if (arguments.Count != 1)
-                        return true;
-
+                    // Check if this is a valid element access or invocation BEFORE getting arguments
+                    // to avoid InvalidCastException when argumentList is something like TupleExpressionSyntax
                     if (!IsGoodElementAccessExpression(argumentList) &&
                         !IsGoodInvocationExpression(argumentList))
                     {
@@ -174,6 +171,11 @@ internal abstract class AbstractConvertForToForEachCodeRefactoringProvider<
                         // can't convert this for-loop.
                         return true;
                     }
+
+                    var arguments = syntaxFacts.GetArgumentsOfArgumentList(argumentList);
+                    // was used in a multi-dimensional indexing, or multiple argument method call.  Can't convert this.
+                    if (arguments.Count != 1)
+                        return true;
                 }
 
                 // this usage of the for-variable is fine.
@@ -181,10 +183,10 @@ internal abstract class AbstractConvertForToForEachCodeRefactoringProvider<
 
             foreach (var child in current.ChildNodesAndTokens())
             {
-                if (child.IsNode)
+                if (child.AsNode(out var childNode) &&
+                    IterationVariableIsUsedForMoreThanCollectionIndex(childNode))
                 {
-                    if (IterationVariableIsUsedForMoreThanCollectionIndex(child.AsNode()!))
-                        return true;
+                    return true;
                 }
             }
 
@@ -458,8 +460,8 @@ internal abstract class AbstractConvertForToForEachCodeRefactoringProvider<
 
             foreach (var child in current.ChildNodesAndTokens())
             {
-                if (child.IsNode)
-                    FindAndReplaceMatches(child.AsNode()!);
+                if (child.AsNode(out var childNode))
+                    FindAndReplaceMatches(childNode);
             }
         }
 

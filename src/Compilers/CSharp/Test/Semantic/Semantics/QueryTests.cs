@@ -2713,7 +2713,7 @@ public class QueryExpressionTest
             var compilation = CreateCompilationWithMscorlib40AndSystemCore(sourceCode, parseOptions: TestOptions.Script);
             var tree = compilation.SyntaxTrees[0];
             var semanticModel = compilation.GetSemanticModel(tree);
-            var queryExpr = tree.GetCompilationUnitRoot().DescendantNodes().OfType<QueryExpressionSyntax>().Where(x => x.ToFullString() == "from i in expr1 let ").Single();
+            var queryExpr = tree.GetCompilationUnitRoot().DescendantNodes().OfType<QueryExpressionSyntax>().Where(x => x.ToFullString() == "from i in expr1 let namespace = expr1 select i").Single();
             var symbolInfo = semanticModel.GetSemanticInfoSummary(queryExpr);
 
             Assert.Null(symbolInfo.Symbol);
@@ -3199,7 +3199,7 @@ ITranslatedQueryOperation (OperationKind.TranslatedQuery, Type: System.Object, I
             IBlockOperation (1 statements) (OperationKind.Block, Type: null, IsInvalid, IsImplicit) (Syntax: 'x')
               IReturnOperation (OperationKind.Return, Type: null, IsInvalid, IsImplicit) (Syntax: 'x')
                 ReturnedValue: 
-                  IParameterReferenceOperation: x (OperationKind.ParameterReference, Type: ?, IsInvalid) (Syntax: 'x')
+                  IParameterReferenceOperation: x (OperationKind.ParameterReference, Type: System.Int32, IsInvalid) (Syntax: 'x')
 ";
             var expectedDiagnostics = new DiagnosticDescription[] {
                 // CS0186: Use of null is not valid in this context
@@ -3246,7 +3246,7 @@ ITranslatedQueryOperation (OperationKind.TranslatedQuery, Type: System.Object, I
             IBlockOperation (1 statements) (OperationKind.Block, Type: null, IsInvalid, IsImplicit) (Syntax: 'x')
               IReturnOperation (OperationKind.Return, Type: null, IsInvalid, IsImplicit) (Syntax: 'x')
                 ReturnedValue: 
-                  IParameterReferenceOperation: x (OperationKind.ParameterReference, Type: ?, IsInvalid) (Syntax: 'x')
+                  IParameterReferenceOperation: x (OperationKind.ParameterReference, Type: System.Int32, IsInvalid) (Syntax: 'x')
 ";
             var expectedDiagnostics = new DiagnosticDescription[] {
                 // CS1936: Could not find an implementation of the query pattern for source type 'anonymous method'.  'Select' not found.
@@ -4496,6 +4496,33 @@ public class C {
         }
 
         [Fact, WorkItem(50316, "https://github.com/dotnet/roslyn/issues/50316")]
+        public void SetOnlyProperty_GroupByContinuation()
+        {
+            var comp = CreateCompilation(@"
+using System.Collections.Generic;
+using System.Linq;
+
+var c = new C();
+var test = from i in c.Prop
+           group i by i into g
+           select g;
+
+public class C {
+    public IEnumerable<int> Prop
+    {
+        set {}
+    }
+}
+", options: TestOptions.ReleaseExe);
+
+            comp.VerifyDiagnostics(
+                // (6,22): error CS0154: The property or indexer 'C.Prop' cannot be used in this context because it lacks the get accessor
+                // var test = from i in c.Prop
+                Diagnostic(ErrorCode.ERR_PropertyLacksGet, "c.Prop").WithArguments("C.Prop").WithLocation(6, 22)
+            );
+        }
+
+        [Fact, WorkItem(50316, "https://github.com/dotnet/roslyn/issues/50316")]
         public void DefaultIndexedPropertyParameters_IndexerCall()
         {
             CompileAndVerify(@"
@@ -4555,6 +4582,253 @@ var test = from @int in i.X
            select @int + 1;
 Console.WriteLine(string.Join(string.Empty, test));
 ", references: new[] { vb.EmitToImageReference() }, expectedOutput: "2");
+        }
+
+        [Theory, CombinatorialData, WorkItem("https://github.com/dotnet/roslyn/issues/73741")]
+        public void MutatingThroughRefFields_01(
+            [CombinatorialValues("ref", "")] string eRef,
+            [CombinatorialValues("readonly", "")] string vReadonly)
+        {
+            var source = $$"""
+                using System;
+
+                V[] arr = new V[3];
+
+                _ = from r in new E(arr)
+                    select r.V.F++;
+
+                foreach (var v in arr) Console.Write(v.F);
+
+                delegate void D(R r);
+
+                {{eRef}} struct E(V[] arr)
+                {
+                    public int Select(D a)
+                    {
+                        for (var i = 0; i < arr.Length; i++)
+                        {
+                            a(new(ref arr[i]));
+                        }
+                        return 0;
+                    }
+                }
+
+                ref struct R(ref V v)
+                {
+                    public {{vReadonly}} ref V V = ref v;
+                }
+
+                struct V
+                {
+                    public int F;
+                }
+                """;
+            CompileAndVerify(source, targetFramework: TargetFramework.Net70,
+                verify: Verification.FailsPEVerify,
+                expectedOutput: ExecutionConditionUtil.IsDesktop ? null : "111").VerifyDiagnostics();
+        }
+
+        [Theory, CombinatorialData, WorkItem("https://github.com/dotnet/roslyn/issues/73741")]
+        public void MutatingThroughRefFields_02(
+            [CombinatorialValues("ref", "")] string eRef,
+            [CombinatorialValues("readonly", "")] string vReadonly)
+        {
+            var source = $$"""
+                using System;
+
+                V[] arr = new V[3];
+
+                _ = from r in new E(arr)
+                    select r.V.F += 2;
+
+                foreach (var v in arr) Console.Write(v.F);
+
+                delegate void D(R r);
+
+                {{eRef}} struct E(V[] arr)
+                {
+                    public int Select(D a)
+                    {
+                        for (var i = 0; i < arr.Length; i++)
+                        {
+                            a(new(ref arr[i]));
+                        }
+                        return 0;
+                    }
+                }
+
+                ref struct R(ref V v)
+                {
+                    public {{vReadonly}} ref V V = ref v;
+                }
+
+                struct V
+                {
+                    public int F;
+                }
+                """;
+            CompileAndVerify(source, targetFramework: TargetFramework.Net70,
+                verify: Verification.FailsPEVerify,
+                expectedOutput: ExecutionConditionUtil.IsDesktop ? null : "222").VerifyDiagnostics();
+        }
+
+        [Theory, CombinatorialData, WorkItem("https://github.com/dotnet/roslyn/issues/73741")]
+        public void MutatingThroughRefFields_03(
+            [CombinatorialValues("ref", "")] string eRef,
+            [CombinatorialValues("readonly", "")] string vReadonly)
+        {
+            var source = $$"""
+                using System;
+
+                V[] arr = new V[3];
+
+                _ = from r in new E(arr)
+                    select r.V.S.Inc();
+
+                foreach (var v in arr) Console.Write(v.S.F);
+
+                delegate void D(R r);
+
+                {{eRef}} struct E(V[] arr)
+                {
+                    public int Select(D a)
+                    {
+                        for (var i = 0; i < arr.Length; i++)
+                        {
+                            a(new(ref arr[i]));
+                        }
+                        return 0;
+                    }
+                }
+
+                ref struct R(ref V v)
+                {
+                    public {{vReadonly}} ref V V = ref v;
+                }
+                
+                struct V
+                {
+                    public S S;
+                }
+                
+                struct S
+                {
+                    public int F;
+                    public void Inc() => F++;
+                }
+                """;
+            CompileAndVerify(source, targetFramework: TargetFramework.Net70,
+                verify: Verification.FailsPEVerify,
+                expectedOutput: ExecutionConditionUtil.IsDesktop ? null : "111").VerifyDiagnostics();
+        }
+
+        [Theory, CombinatorialData, WorkItem("https://github.com/dotnet/roslyn/issues/73741")]
+        public void MutatingThroughRefFields_04(
+            [CombinatorialValues("ref", "")] string eRef,
+            [CombinatorialValues("readonly", "")] string vReadonly)
+        {
+            var source = $$"""
+                using System;
+
+                V[] arr = new V[3];
+
+                _ = from r in new E(arr)
+                    select r.V.F++;
+
+                foreach (var v in arr) Console.Write(v.F);
+
+                delegate void D(R r);
+
+                {{eRef}} struct E(V[] arr)
+                {
+                    public int Select(D a)
+                    {
+                        for (var i = 0; i < arr.Length; i++)
+                        {
+                            a(new(ref arr[i]));
+                        }
+                        return 0;
+                    }
+                }
+                
+                ref struct R(ref V v)
+                {
+                    public {{vReadonly}} ref readonly V V = ref v;
+                }
+                
+                struct V
+                {
+                    public int F;
+                }
+                """;
+            CreateCompilation(source, targetFramework: TargetFramework.Net70).VerifyDiagnostics(
+                // (6,12): error CS8332: Cannot assign to a member of field 'V' or use it as the right hand side of a ref assignment because it is a readonly variable
+                //     select r.V.F++;
+                Diagnostic(ErrorCode.ERR_AssignReadonlyNotField2, "r.V.F").WithArguments("field", "V").WithLocation(6, 12));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/80008")]
+        public void PropertyAccess_Instance()
+        {
+            var code = """
+                using System.Linq;
+
+                var f = new F();
+                var r = from string s in f.M from string s2 in f.M2 select s.ToString();
+                foreach (var x in r)
+                {
+                    System.Console.Write(x.ToString());
+                }
+
+                public class F
+                {
+                    public object[] M => ["ran"];
+                    public object[] M2 => [""];
+                }
+                """;
+
+            var comp = CreateCompilation(code);
+            CompileAndVerify(code, expectedOutput: "ran").VerifyDiagnostics();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/80008")]
+        public void PropertyAccess_Static()
+        {
+            var code = """
+                using System.Linq;
+
+                var r = from string s in F.M from string s2 in F.M2 select s.ToString();
+                foreach (var x in r)
+                {
+                    System.Console.Write(x.ToString());
+                }
+
+                public static class F
+                {
+                    public static object[] M => ["ran"];
+                    public static object[] M2 => [""];
+                }
+                """;
+
+            var comp = CreateCompilation(code);
+            CompileAndVerify(code, expectedOutput: "ran").VerifyDiagnostics();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/81709")]
+        public void PropertyAccess_AnonymousType_GroupBy()
+        {
+            var code = """
+                using System.Linq;
+
+                var x = new { A = new[] { new { B = 1 } } };
+
+                var y = from a in x.A
+                        group a by a.B into g
+                        select 1;
+                """;
+
+            var comp = CreateCompilation(code);
+            comp.VerifyDiagnostics();
         }
     }
 }

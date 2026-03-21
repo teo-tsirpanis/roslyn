@@ -4,9 +4,9 @@
 
 #nullable disable
 
+using System;
 using Microsoft.CodeAnalysis.CSharp.Test.Utilities;
 using Roslyn.Test.Utilities;
-using System;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -1567,9 +1567,6 @@ class C
 {
     async partial event
 ",
-                // (4,19): error CS1519: Invalid token 'event' in class, record, struct, or interface member declaration
-                //     async partial event
-                Diagnostic(ErrorCode.ERR_InvalidMemberDecl, "event").WithArguments("event").WithLocation(4, 19),
                 // (4,24): error CS1031: Type expected
                 //     async partial event
                 Diagnostic(ErrorCode.ERR_TypeExpected, "").WithLocation(4, 24),
@@ -1589,16 +1586,10 @@ class C
                     N(SyntaxKind.ClassKeyword);
                     N(SyntaxKind.IdentifierToken, "C");
                     N(SyntaxKind.OpenBraceToken);
-                    N(SyntaxKind.IncompleteMember);
-                    {
-                        N(SyntaxKind.AsyncKeyword);
-                        N(SyntaxKind.IdentifierName);
-                        {
-                            N(SyntaxKind.IdentifierToken, "partial");
-                        }
-                    }
                     N(SyntaxKind.EventDeclaration);
                     {
+                        N(SyntaxKind.AsyncKeyword);
+                        N(SyntaxKind.PartialKeyword);
                         N(SyntaxKind.EventKeyword);
                         M(SyntaxKind.IdentifierName);
                         {
@@ -1681,21 +1672,15 @@ class C
 {
     async partial implicit operator
 ",
-                // (4,11): error CS1553: Declaration is not valid; use '+ operator <dest-type> (...' instead
+                // (4,11): error CS1553: Declaration is not valid; use 'implicit operator <dest-type> (...' instead
                 //     async partial implicit operator
-                Diagnostic(ErrorCode.ERR_BadOperatorSyntax, "partial").WithArguments("+").WithLocation(4, 11),
-                // (4,19): error CS1003: Syntax error, 'operator' expected
+                Diagnostic(ErrorCode.ERR_BadOperatorSyntax, "partial").WithArguments("implicit").WithLocation(4, 11),
+                // (4,36): error CS1031: Type expected
                 //     async partial implicit operator
-                Diagnostic(ErrorCode.ERR_SyntaxError, "implicit").WithArguments("operator").WithLocation(4, 19),
-                // (4,19): error CS1037: Overloadable operator expected
+                Diagnostic(ErrorCode.ERR_TypeExpected, "").WithLocation(4, 36),
+                // (4,36): error CS1003: Syntax error, '(' expected
                 //     async partial implicit operator
-                Diagnostic(ErrorCode.ERR_OvlOperatorExpected, "implicit").WithLocation(4, 19),
-                // (4,28): error CS1003: Syntax error, '(' expected
-                //     async partial implicit operator
-                Diagnostic(ErrorCode.ERR_SyntaxError, "operator").WithArguments("(").WithLocation(4, 28),
-                // (4,28): error CS1041: Identifier expected; 'operator' is a keyword
-                //     async partial implicit operator
-                Diagnostic(ErrorCode.ERR_IdentifierExpectedKW, "operator").WithArguments("", "operator").WithLocation(4, 28),
+                Diagnostic(ErrorCode.ERR_SyntaxError, "").WithArguments("(").WithLocation(4, 36),
                 // (4,36): error CS1026: ) expected
                 //     async partial implicit operator
                 Diagnostic(ErrorCode.ERR_CloseParenExpected, "").WithLocation(4, 36),
@@ -1712,15 +1697,15 @@ class C
                     N(SyntaxKind.ClassKeyword);
                     N(SyntaxKind.IdentifierToken, "C");
                     N(SyntaxKind.OpenBraceToken);
-                    N(SyntaxKind.OperatorDeclaration);
+                    N(SyntaxKind.ConversionOperatorDeclaration);
                     {
                         N(SyntaxKind.AsyncKeyword);
-                        N(SyntaxKind.IdentifierName);
+                        N(SyntaxKind.ImplicitKeyword);
+                        N(SyntaxKind.OperatorKeyword);
+                        M(SyntaxKind.IdentifierName);
                         {
-                            N(SyntaxKind.IdentifierToken, "partial");
+                            M(SyntaxKind.IdentifierToken);
                         }
-                        M(SyntaxKind.OperatorKeyword);
-                        M(SyntaxKind.PlusToken);
                         M(SyntaxKind.ParameterList);
                         {
                             M(SyntaxKind.OpenParenToken);
@@ -1798,21 +1783,15 @@ class C
 {
     async partial explicit operator
 ",
-                // (4,11): error CS1553: Declaration is not valid; use '+ operator <dest-type> (...' instead
+                // (4,11): error CS1553: Declaration is not valid; use 'explicit operator <dest-type> (...' instead
                 //     async partial explicit operator
-                Diagnostic(ErrorCode.ERR_BadOperatorSyntax, "partial").WithArguments("+").WithLocation(4, 11),
-                // (4,19): error CS1003: Syntax error, 'operator' expected
+                Diagnostic(ErrorCode.ERR_BadOperatorSyntax, "partial").WithArguments("explicit").WithLocation(4, 11),
+                // (4,36): error CS1031: Type expected
                 //     async partial explicit operator
-                Diagnostic(ErrorCode.ERR_SyntaxError, "explicit").WithArguments("operator").WithLocation(4, 19),
-                // (4,19): error CS1037: Overloadable operator expected
+                Diagnostic(ErrorCode.ERR_TypeExpected, "").WithLocation(4, 36),
+                // (4,36): error CS1003: Syntax error, '(' expected
                 //     async partial explicit operator
-                Diagnostic(ErrorCode.ERR_OvlOperatorExpected, "explicit").WithLocation(4, 19),
-                // (4,28): error CS1003: Syntax error, '(' expected
-                //     async partial explicit operator
-                Diagnostic(ErrorCode.ERR_SyntaxError, "operator").WithArguments("(").WithLocation(4, 28),
-                // (4,28): error CS1041: Identifier expected; 'operator' is a keyword
-                //     async partial explicit operator
-                Diagnostic(ErrorCode.ERR_IdentifierExpectedKW, "operator").WithArguments("", "operator").WithLocation(4, 28),
+                Diagnostic(ErrorCode.ERR_SyntaxError, "").WithArguments("(").WithLocation(4, 36),
                 // (4,36): error CS1026: ) expected
                 //     async partial explicit operator
                 Diagnostic(ErrorCode.ERR_CloseParenExpected, "").WithLocation(4, 36),
@@ -1822,6 +1801,7 @@ class C
                 // (4,36): error CS1513: } expected
                 //     async partial explicit operator
                 Diagnostic(ErrorCode.ERR_RbraceExpected, "").WithLocation(4, 36));
+
             N(SyntaxKind.CompilationUnit);
             {
                 N(SyntaxKind.ClassDeclaration);
@@ -1829,15 +1809,15 @@ class C
                     N(SyntaxKind.ClassKeyword);
                     N(SyntaxKind.IdentifierToken, "C");
                     N(SyntaxKind.OpenBraceToken);
-                    N(SyntaxKind.OperatorDeclaration);
+                    N(SyntaxKind.ConversionOperatorDeclaration);
                     {
                         N(SyntaxKind.AsyncKeyword);
-                        N(SyntaxKind.IdentifierName);
+                        N(SyntaxKind.ExplicitKeyword);
+                        N(SyntaxKind.OperatorKeyword);
+                        M(SyntaxKind.IdentifierName);
                         {
-                            N(SyntaxKind.IdentifierToken, "partial");
+                            M(SyntaxKind.IdentifierToken);
                         }
-                        M(SyntaxKind.OperatorKeyword);
-                        M(SyntaxKind.PlusToken);
                         M(SyntaxKind.ParameterList);
                         {
                             M(SyntaxKind.OpenParenToken);
@@ -2651,6 +2631,385 @@ namespace",
                             }
                         }
                         N(SyntaxKind.SemicolonToken);
+                    }
+                    N(SyntaxKind.CloseBraceToken);
+                }
+                N(SyntaxKind.EndOfFileToken);
+            }
+            EOF();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/72720")]
+        public void AsyncLambdaInConditionalExpressionAfterPattern1()
+        {
+            UsingExpression("x is A ? async b => 0 : null");
+
+            N(SyntaxKind.ConditionalExpression);
+            {
+                N(SyntaxKind.IsExpression);
+                {
+                    N(SyntaxKind.IdentifierName);
+                    {
+                        N(SyntaxKind.IdentifierToken, "x");
+                    }
+                    N(SyntaxKind.IsKeyword);
+                    N(SyntaxKind.IdentifierName);
+                    {
+                        N(SyntaxKind.IdentifierToken, "A");
+                    }
+                }
+                N(SyntaxKind.QuestionToken);
+                N(SyntaxKind.SimpleLambdaExpression);
+                {
+                    N(SyntaxKind.AsyncKeyword);
+                    N(SyntaxKind.Parameter);
+                    {
+                        N(SyntaxKind.IdentifierToken, "b");
+                    }
+                    N(SyntaxKind.EqualsGreaterThanToken);
+                    N(SyntaxKind.NumericLiteralExpression);
+                    {
+                        N(SyntaxKind.NumericLiteralToken, "0");
+                    }
+                }
+                N(SyntaxKind.ColonToken);
+                N(SyntaxKind.NullLiteralExpression);
+                {
+                    N(SyntaxKind.NullKeyword);
+                }
+            }
+            EOF();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/72720")]
+        public void AsyncLambdaInConditionalExpressionAfterPattern2()
+        {
+            UsingExpression("x is A a ? async b => 0 : null");
+
+            N(SyntaxKind.ConditionalExpression);
+            {
+                N(SyntaxKind.IsPatternExpression);
+                {
+                    N(SyntaxKind.IdentifierName);
+                    {
+                        N(SyntaxKind.IdentifierToken, "x");
+                    }
+                    N(SyntaxKind.IsKeyword);
+                    N(SyntaxKind.DeclarationPattern);
+                    {
+                        N(SyntaxKind.IdentifierName);
+                        {
+                            N(SyntaxKind.IdentifierToken, "A");
+                        }
+                        N(SyntaxKind.SingleVariableDesignation);
+                        {
+                            N(SyntaxKind.IdentifierToken, "a");
+                        }
+                    }
+                }
+                N(SyntaxKind.QuestionToken);
+                N(SyntaxKind.SimpleLambdaExpression);
+                {
+                    N(SyntaxKind.AsyncKeyword);
+                    N(SyntaxKind.Parameter);
+                    {
+                        N(SyntaxKind.IdentifierToken, "b");
+                    }
+                    N(SyntaxKind.EqualsGreaterThanToken);
+                    N(SyntaxKind.NumericLiteralExpression);
+                    {
+                        N(SyntaxKind.NumericLiteralToken, "0");
+                    }
+                }
+                N(SyntaxKind.ColonToken);
+                N(SyntaxKind.NullLiteralExpression);
+                {
+                    N(SyntaxKind.NullKeyword);
+                }
+            }
+            EOF();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/72720")]
+        public void AsyncLambdaInConditionalExpressionAfterPattern3()
+        {
+            UsingExpression("x is A ? async (b) => 0 : null");
+
+            N(SyntaxKind.ConditionalExpression);
+            {
+                N(SyntaxKind.IsExpression);
+                {
+                    N(SyntaxKind.IdentifierName);
+                    {
+                        N(SyntaxKind.IdentifierToken, "x");
+                    }
+                    N(SyntaxKind.IsKeyword);
+                    N(SyntaxKind.IdentifierName);
+                    {
+                        N(SyntaxKind.IdentifierToken, "A");
+                    }
+                }
+                N(SyntaxKind.QuestionToken);
+                N(SyntaxKind.ParenthesizedLambdaExpression);
+                {
+                    N(SyntaxKind.AsyncKeyword);
+                    N(SyntaxKind.ParameterList);
+                    {
+                        N(SyntaxKind.OpenParenToken);
+                        N(SyntaxKind.Parameter);
+                        {
+                            N(SyntaxKind.IdentifierToken, "b");
+                        }
+                        N(SyntaxKind.CloseParenToken);
+                    }
+                    N(SyntaxKind.EqualsGreaterThanToken);
+                    N(SyntaxKind.NumericLiteralExpression);
+                    {
+                        N(SyntaxKind.NumericLiteralToken, "0");
+                    }
+                }
+                N(SyntaxKind.ColonToken);
+                N(SyntaxKind.NullLiteralExpression);
+                {
+                    N(SyntaxKind.NullKeyword);
+                }
+            }
+            EOF();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/72720")]
+        public void AsyncLambdaInConditionalExpressionAfterPattern4()
+        {
+            UsingExpression("x is A a ? async (b) => 0 : null");
+
+            N(SyntaxKind.ConditionalExpression);
+            {
+                N(SyntaxKind.IsPatternExpression);
+                {
+                    N(SyntaxKind.IdentifierName);
+                    {
+                        N(SyntaxKind.IdentifierToken, "x");
+                    }
+                    N(SyntaxKind.IsKeyword);
+                    N(SyntaxKind.DeclarationPattern);
+                    {
+                        N(SyntaxKind.IdentifierName);
+                        {
+                            N(SyntaxKind.IdentifierToken, "A");
+                        }
+                        N(SyntaxKind.SingleVariableDesignation);
+                        {
+                            N(SyntaxKind.IdentifierToken, "a");
+                        }
+                    }
+                }
+                N(SyntaxKind.QuestionToken);
+                N(SyntaxKind.ParenthesizedLambdaExpression);
+                {
+                    N(SyntaxKind.AsyncKeyword);
+                    N(SyntaxKind.ParameterList);
+                    {
+                        N(SyntaxKind.OpenParenToken);
+                        N(SyntaxKind.Parameter);
+                        {
+                            N(SyntaxKind.IdentifierToken, "b");
+                        }
+                        N(SyntaxKind.CloseParenToken);
+                    }
+                    N(SyntaxKind.EqualsGreaterThanToken);
+                    N(SyntaxKind.NumericLiteralExpression);
+                    {
+                        N(SyntaxKind.NumericLiteralToken, "0");
+                    }
+                }
+                N(SyntaxKind.ColonToken);
+                N(SyntaxKind.NullLiteralExpression);
+                {
+                    N(SyntaxKind.NullKeyword);
+                }
+            }
+            EOF();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/39149")]
+        public void AwaitInInterpolatedString_WithParentheses()
+        {
+            UsingTree("""
+                class C
+                {
+                    async void M()
+                    {
+                        var v = $"{await (M())}";
+                    }
+                }
+                """);
+
+            N(SyntaxKind.CompilationUnit);
+            {
+                N(SyntaxKind.ClassDeclaration);
+                {
+                    N(SyntaxKind.ClassKeyword);
+                    N(SyntaxKind.IdentifierToken, "C");
+                    N(SyntaxKind.OpenBraceToken);
+                    N(SyntaxKind.MethodDeclaration);
+                    {
+                        N(SyntaxKind.AsyncKeyword);
+                        N(SyntaxKind.PredefinedType);
+                        {
+                            N(SyntaxKind.VoidKeyword);
+                        }
+                        N(SyntaxKind.IdentifierToken, "M");
+                        N(SyntaxKind.ParameterList);
+                        {
+                            N(SyntaxKind.OpenParenToken);
+                            N(SyntaxKind.CloseParenToken);
+                        }
+                        N(SyntaxKind.Block);
+                        {
+                            N(SyntaxKind.OpenBraceToken);
+                            N(SyntaxKind.LocalDeclarationStatement);
+                            {
+                                N(SyntaxKind.VariableDeclaration);
+                                {
+                                    N(SyntaxKind.IdentifierName);
+                                    {
+                                        N(SyntaxKind.IdentifierToken, "var");
+                                    }
+                                    N(SyntaxKind.VariableDeclarator);
+                                    {
+                                        N(SyntaxKind.IdentifierToken, "v");
+                                        N(SyntaxKind.EqualsValueClause);
+                                        {
+                                            N(SyntaxKind.EqualsToken);
+                                            N(SyntaxKind.InterpolatedStringExpression);
+                                            {
+                                                N(SyntaxKind.InterpolatedStringStartToken);
+                                                N(SyntaxKind.Interpolation);
+                                                {
+                                                    N(SyntaxKind.OpenBraceToken);
+                                                    N(SyntaxKind.AwaitExpression);
+                                                    {
+                                                        N(SyntaxKind.AwaitKeyword);
+                                                        N(SyntaxKind.ParenthesizedExpression);
+                                                        {
+                                                            N(SyntaxKind.OpenParenToken);
+                                                            N(SyntaxKind.InvocationExpression);
+                                                            {
+                                                                N(SyntaxKind.IdentifierName);
+                                                                {
+                                                                    N(SyntaxKind.IdentifierToken, "M");
+                                                                }
+                                                                N(SyntaxKind.ArgumentList);
+                                                                {
+                                                                    N(SyntaxKind.OpenParenToken);
+                                                                    N(SyntaxKind.CloseParenToken);
+                                                                }
+                                                            }
+                                                            N(SyntaxKind.CloseParenToken);
+                                                        }
+                                                    }
+                                                    N(SyntaxKind.CloseBraceToken);
+                                                }
+                                                N(SyntaxKind.InterpolatedStringEndToken);
+                                            }
+                                        }
+                                    }
+                                }
+                                N(SyntaxKind.SemicolonToken);
+                            }
+                            N(SyntaxKind.CloseBraceToken);
+                        }
+                    }
+                    N(SyntaxKind.CloseBraceToken);
+                }
+                N(SyntaxKind.EndOfFileToken);
+            }
+            EOF();
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/39149")]
+        public void AwaitInInterpolatedString_WithoutParentheses()
+        {
+            UsingTree("""
+                class C
+                {
+                    async void M()
+                    {
+                        var v = $"{await M()}";
+                    }
+                }
+                """);
+
+            N(SyntaxKind.CompilationUnit);
+            {
+                N(SyntaxKind.ClassDeclaration);
+                {
+                    N(SyntaxKind.ClassKeyword);
+                    N(SyntaxKind.IdentifierToken, "C");
+                    N(SyntaxKind.OpenBraceToken);
+                    N(SyntaxKind.MethodDeclaration);
+                    {
+                        N(SyntaxKind.AsyncKeyword);
+                        N(SyntaxKind.PredefinedType);
+                        {
+                            N(SyntaxKind.VoidKeyword);
+                        }
+                        N(SyntaxKind.IdentifierToken, "M");
+                        N(SyntaxKind.ParameterList);
+                        {
+                            N(SyntaxKind.OpenParenToken);
+                            N(SyntaxKind.CloseParenToken);
+                        }
+                        N(SyntaxKind.Block);
+                        {
+                            N(SyntaxKind.OpenBraceToken);
+                            N(SyntaxKind.LocalDeclarationStatement);
+                            {
+                                N(SyntaxKind.VariableDeclaration);
+                                {
+                                    N(SyntaxKind.IdentifierName);
+                                    {
+                                        N(SyntaxKind.IdentifierToken, "var");
+                                    }
+                                    N(SyntaxKind.VariableDeclarator);
+                                    {
+                                        N(SyntaxKind.IdentifierToken, "v");
+                                        N(SyntaxKind.EqualsValueClause);
+                                        {
+                                            N(SyntaxKind.EqualsToken);
+                                            N(SyntaxKind.InterpolatedStringExpression);
+                                            {
+                                                N(SyntaxKind.InterpolatedStringStartToken);
+                                                N(SyntaxKind.Interpolation);
+                                                {
+                                                    N(SyntaxKind.OpenBraceToken);
+                                                    N(SyntaxKind.AwaitExpression);
+                                                    {
+                                                        N(SyntaxKind.AwaitKeyword);
+                                                        N(SyntaxKind.InvocationExpression);
+                                                        {
+                                                            N(SyntaxKind.IdentifierName);
+                                                            {
+                                                                N(SyntaxKind.IdentifierToken, "M");
+                                                            }
+                                                            N(SyntaxKind.ArgumentList);
+                                                            {
+                                                                N(SyntaxKind.OpenParenToken);
+                                                                N(SyntaxKind.CloseParenToken);
+                                                            }
+                                                        }
+                                                    }
+                                                    N(SyntaxKind.CloseBraceToken);
+                                                }
+                                                N(SyntaxKind.InterpolatedStringEndToken);
+                                            }
+                                        }
+                                    }
+                                }
+                                N(SyntaxKind.SemicolonToken);
+                            }
+                            N(SyntaxKind.CloseBraceToken);
+                        }
                     }
                     N(SyntaxKind.CloseBraceToken);
                 }

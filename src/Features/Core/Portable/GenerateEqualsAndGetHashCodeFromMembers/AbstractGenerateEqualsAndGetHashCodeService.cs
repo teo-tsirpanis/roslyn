@@ -3,7 +3,6 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
@@ -11,7 +10,6 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.CodeGeneration;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.Formatting;
-using Microsoft.CodeAnalysis.Formatting.Rules;
 using Microsoft.CodeAnalysis.LanguageService;
 using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Shared.Extensions;
@@ -28,12 +26,12 @@ internal abstract partial class AbstractGenerateEqualsAndGetHashCodeService : IG
 
     public async Task<Document> FormatDocumentAsync(Document document, SyntaxFormattingOptions options, CancellationToken cancellationToken)
     {
-        var rules = new List<AbstractFormattingRule> { new FormatLargeBinaryExpressionRule(document.GetRequiredLanguageService<ISyntaxFactsService>()) };
-        rules.AddRange(Formatter.GetDefaultFormattingRules(document));
-
+        var formatBinaryRule = new FormatLargeBinaryExpressionRule(document.GetRequiredLanguageService<ISyntaxFactsService>());
         var formattedDocument = await Formatter.FormatAsync(
             document, s_specializedFormattingAnnotation,
-            options, rules, cancellationToken).ConfigureAwait(false);
+            options,
+            [formatBinaryRule, .. Formatter.GetDefaultFormattingRules(document)],
+            cancellationToken).ConfigureAwait(false);
         return formattedDocument;
     }
 
@@ -41,10 +39,10 @@ internal abstract partial class AbstractGenerateEqualsAndGetHashCodeService : IG
         Document document, INamedTypeSymbol namedType, ImmutableArray<ISymbol> members,
         string? localNameOpt, CancellationToken cancellationToken)
     {
-        var compilation = await document.Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+        var compilation = await document.Project.GetRequiredCompilationAsync(cancellationToken).ConfigureAwait(false);
         var tree = await document.GetRequiredSyntaxTreeAsync(cancellationToken).ConfigureAwait(false);
-        var generator = document.GetLanguageService<SyntaxGenerator>();
-        var generatorInternal = document.GetLanguageService<SyntaxGeneratorInternal>();
+        var generator = document.GetRequiredLanguageService<SyntaxGenerator>();
+        var generatorInternal = document.GetRequiredLanguageService<SyntaxGeneratorInternal>();
         return generator.CreateEqualsMethod(
             generatorInternal, compilation, tree.Options, namedType, members, localNameOpt, s_specializedFormattingAnnotation);
     }
@@ -53,9 +51,9 @@ internal abstract partial class AbstractGenerateEqualsAndGetHashCodeService : IG
         Document document, INamedTypeSymbol namedType,
         ImmutableArray<ISymbol> members, INamedTypeSymbol constructedEquatableType, CancellationToken cancellationToken)
     {
-        var semanticModel = await document.GetSemanticModelAsync(cancellationToken).ConfigureAwait(false);
-        var generator = document.GetLanguageService<SyntaxGenerator>();
-        var generatorInternal = document.GetLanguageService<SyntaxGeneratorInternal>();
+        var semanticModel = await document.GetRequiredSemanticModelAsync(cancellationToken).ConfigureAwait(false);
+        var generator = document.GetRequiredLanguageService<SyntaxGenerator>();
+        var generatorInternal = document.GetRequiredLanguageService<SyntaxGeneratorInternal>();
         return generator.CreateIEquatableEqualsMethod(
             generatorInternal, semanticModel, namedType, members, constructedEquatableType, s_specializedFormattingAnnotation);
     }
@@ -63,7 +61,7 @@ internal abstract partial class AbstractGenerateEqualsAndGetHashCodeService : IG
     public async Task<IMethodSymbol> GenerateEqualsMethodThroughIEquatableEqualsAsync(
         Document document, INamedTypeSymbol containingType, CancellationToken cancellationToken)
     {
-        var compilation = await document.Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
+        var compilation = await document.Project.GetRequiredCompilationAsync(cancellationToken).ConfigureAwait(false);
         var tree = await document.GetRequiredSyntaxTreeAsync(cancellationToken).ConfigureAwait(false);
         var generator = document.GetRequiredLanguageService<SyntaxGenerator>();
 
@@ -112,8 +110,7 @@ internal abstract partial class AbstractGenerateEqualsAndGetHashCodeService : IG
         var statement = generator.ReturnStatement(
             expressions.Aggregate(generator.LogicalAndExpression));
 
-        return compilation.CreateEqualsMethod(
-            [statement]);
+        return compilation.CreateEqualsMethod([statement]);
     }
 
     public async Task<IMethodSymbol> GenerateGetHashCodeMethodAsync(

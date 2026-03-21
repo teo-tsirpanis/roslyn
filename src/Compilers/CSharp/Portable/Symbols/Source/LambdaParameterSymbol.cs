@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Collections.Immutable;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Roslyn.Utilities;
 
@@ -23,9 +24,9 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
            ScopedKind scope,
            string name,
            bool isDiscard,
-           bool isParams,
+           bool hasParamsModifier,
            Location location)
-           : base(owner, ordinal, refKind, name, location, syntaxRef, isParams, isExtensionMethodThis: false, scope)
+           : base(owner, ordinal, refKind, name, location, syntaxRef, hasParamsModifier: hasParamsModifier, isParams: hasParamsModifier, isExtensionMethodThis: false, scope)
         {
             _parameterType = parameterType;
             _attributeLists = attributeLists;

@@ -3,11 +3,12 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.CSharp.Symbols;
-using Microsoft.CodeAnalysis.Shared.Collections;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Microsoft.CodeAnalysis.CSharp
 {
@@ -188,7 +189,7 @@ namespace Microsoft.CodeAnalysis.CSharp
             return rewrittenCondition;
         }
 
-        public virtual BoundStatement InstrumentIfStatement(BoundIfStatement original, BoundStatement rewritten)
+        public virtual BoundStatement InstrumentIfStatementConditionalGoto(BoundIfStatement original, BoundStatement rewritten)
         {
             Debug.Assert(original.Syntax.Kind() == SyntaxKind.IfStatement);
             return InstrumentStatement(original, rewritten);
@@ -226,6 +227,20 @@ namespace Microsoft.CodeAnalysis.CSharp
         public virtual BoundExpression InstrumentCall(BoundCall original, BoundExpression rewritten)
         {
             return rewritten;
+        }
+
+        /// <summary>
+        /// Similarly to an interceptor, gives the instrumenter an opportunity to adjust call target, receiver and arguments.
+        /// </summary>
+        /// <remarks>
+        /// Unlike interceptors, called also for constructor calls (with <paramref name="receiver"/> being null).
+        /// </remarks>
+        public virtual void InterceptCallAndAdjustArguments(
+            ref MethodSymbol method,
+            ref BoundExpression? receiver,
+            ref ImmutableArray<BoundExpression> arguments,
+            ref ImmutableArray<RefKind> argumentRefKindsOpt)
+        {
         }
 
         public virtual BoundExpression InstrumentObjectCreationExpression(BoundObjectCreationExpression original, BoundExpression rewritten)

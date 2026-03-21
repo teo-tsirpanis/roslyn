@@ -25,7 +25,7 @@ namespace Microsoft.CodeAnalysis.Editor.Implementation.RenameTracking;
 
 internal sealed partial class RenameTrackingTaggerProvider
 {
-    private class RenameTrackingCommitter
+    private sealed class RenameTrackingCommitter
     {
         private readonly StateMachine _stateMachine;
         private readonly SnapshotSpan _snapshotSpan;
@@ -46,7 +46,9 @@ internal sealed partial class RenameTrackingTaggerProvider
             _refactorNotifyServices = refactorNotifyServices;
             _undoHistoryRegistry = undoHistoryRegistry;
             _displayText = displayText;
-            _renameSymbolResultGetter = AsyncLazy.Create(c => RenameSymbolWorkerAsync(c));
+            _renameSymbolResultGetter = AsyncLazy.Create(
+                static (self, c) => self.RenameSymbolWorkerAsync(c),
+                arg: this);
         }
 
         /// <summary>
@@ -194,12 +196,10 @@ internal sealed partial class RenameTrackingTaggerProvider
 
             // Apply the original name to all linked documents to construct a consistent solution
             var solution = document.Project.Solution;
-            foreach (var documentId in document.GetLinkedDocumentIds().Add(document.Id))
-            {
-                solution = solution.WithDocumentText(documentId, newFullText);
-            }
+            var finalSolution = solution.WithDocumentTexts(
+                document.GetLinkedDocumentIds().Add(document.Id).SelectAsArray(id => (id, newFullText)));
 
-            return solution;
+            return finalSolution;
         }
 
         private async Task<ISymbol> TryGetSymbolAsync(Solution solutionWithOriginalName, DocumentId documentId, CancellationToken cancellationToken)

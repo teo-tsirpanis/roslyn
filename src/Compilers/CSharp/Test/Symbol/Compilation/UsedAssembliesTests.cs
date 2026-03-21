@@ -5451,6 +5451,8 @@ namespace System
     public class Object {}
     public class ValueType {}
     public struct Void {}
+
+    public struct RuntimeTypeHandle {}
 }
 ";
             var parseOptions = TestOptions.Regular.WithNoRefSafetyRulesAttribute();
@@ -5466,8 +5468,6 @@ namespace System
     {
         public static Type GetTypeFromHandle(RuntimeTypeHandle handle) => default;
     }
-
-    public struct RuntimeTypeHandle {}
 }
 ";
             var comp1 = CreateEmptyCompilation(source1, references: new[] { comp0Ref }, parseOptions: parseOptions);
@@ -6024,6 +6024,80 @@ public class C2
 ";
 
             CompileWithUsedAssemblyReferences(source4, comp1Ref);
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/73558")]
+        public void AnonymousTypes_01()
+        {
+            var source =
+@"
+class Program
+{
+    static void Main()
+    {
+        var anon = new { X = 1, Y = 2 };
+    }
+}
+";
+            var comp1 = CreateCompilation(source, targetFramework: TargetFramework.Net100);
+            var used = comp1.GetUsedAssemblyReferences();
+            AssertEx.Equal("System.Collections", comp1.GetWellKnownType(WellKnownType.System_Collections_Generic_EqualityComparer_T).ContainingAssembly.Name);
+
+            CompileAndVerify(comp1, verify: Verification.FailsPEVerify).VerifyDiagnostics();
+
+            var comp2 = comp1.RemoveAllReferences().AddReferences(used);
+            CompileAndVerify(comp2, verify: Verification.FailsPEVerify).VerifyDiagnostics();
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/73558")]
+        public void AnonymousTypes_02()
+        {
+            var source =
+@"
+class Program
+{
+    static void Main()
+    {
+        var anon = (int x, int y) => {};
+    }
+}
+";
+            var comp1 = CreateCompilation(source, targetFramework: TargetFramework.Net100);
+            var used = comp1.GetUsedAssemblyReferences();
+
+            CompileAndVerify(comp1, verify: Verification.FailsPEVerify).VerifyDiagnostics();
+
+            var comp2 = comp1.RemoveAllReferences().AddReferences(used);
+            CompileAndVerify(comp2, verify: Verification.FailsPEVerify).VerifyDiagnostics();
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/73558")]
+        public void AnonymousTypes_03()
+        {
+            var source =
+@"
+class Program
+{
+    static void Main()
+    {
+        var anon1 = new { X = 1, Y = 2 };
+        var anon2 = new { U = 1, V = 2 };
+    }
+}
+";
+            var comp1 = CreateCompilation(source, targetFramework: TargetFramework.Net100);
+            comp1.MakeTypeMissing(WellKnownType.System_Collections_Generic_EqualityComparer_T);
+            comp1.VerifyEmitDiagnostics(
+                // error CS0656: Missing compiler required member 'System.Collections.Generic.EqualityComparer`1.Equals'
+                Diagnostic(ErrorCode.ERR_MissingPredefinedMember).WithArguments("System.Collections.Generic.EqualityComparer`1", "Equals").WithLocation(1, 1),
+                // error CS0656: Missing compiler required member 'System.Collections.Generic.EqualityComparer`1.GetHashCode'
+                Diagnostic(ErrorCode.ERR_MissingPredefinedMember).WithArguments("System.Collections.Generic.EqualityComparer`1", "GetHashCode").WithLocation(1, 1),
+                // error CS0656: Missing compiler required member 'System.Collections.Generic.EqualityComparer`1.get_Default'
+                Diagnostic(ErrorCode.ERR_MissingPredefinedMember).WithArguments("System.Collections.Generic.EqualityComparer`1", "get_Default").WithLocation(1, 1)
+                );
         }
     }
 }

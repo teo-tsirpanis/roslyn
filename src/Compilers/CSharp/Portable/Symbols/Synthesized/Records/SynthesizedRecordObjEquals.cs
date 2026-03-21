@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Collections.Immutable;
+using System.Diagnostics;
 
 namespace Microsoft.CodeAnalysis.CSharp.Symbols
 {
@@ -33,7 +34,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                     Parameters: ImmutableArray.Create<ParameterSymbol>(
                                     new SourceSimpleParameterSymbol(owner: this,
                                                                     TypeWithAnnotations.Create(Binder.GetSpecialType(compilation, SpecialType.System_Object, location, diagnostics), annotation),
-                                                                    ordinal: 0, RefKind.None, ScopedKind.None, "obj", Locations)));
+                                                                    ordinal: 0, RefKind.None, "obj", Locations)));
         }
 
         protected override int GetParameterCountFromSyntax() => 1;
@@ -58,9 +59,12 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 {
                     // For record structs:
                     //      return other is R && Equals((R)other)
+                    Debug.Assert(paramAccess.Type.IsObjectType());
+                    Conversion c = F.ClassifyEmitConversion(paramAccess, ContainingType);
+                    Debug.Assert(c.IsUnboxing);
                     expression = F.LogicalAnd(
                         F.Is(paramAccess, ContainingType),
-                        F.Call(F.This(), _typedRecordEquals, F.Convert(ContainingType, paramAccess)));
+                        F.Call(F.This(), _typedRecordEquals, F.Convert(ContainingType, paramAccess, c)));
                 }
                 else
                 {

@@ -2,10 +2,10 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.CodeAnalysis.Classification;
+using Microsoft.CodeAnalysis.Notification;
 using Microsoft.CodeAnalysis.Shared.Utilities;
 
 namespace Microsoft.CodeAnalysis.FindUsages;
@@ -19,16 +19,15 @@ internal interface IFindUsagesContext
     IStreamingProgressTracker ProgressTracker { get; }
 
     /// <summary>
-    /// Report a failure message to be displayed to the user.  This will be reported if the find operation returns
-    /// no results.
+    /// Report a message that the find operation returned no results.
     /// </summary>
-    ValueTask ReportMessageAsync(string message, CancellationToken cancellationToken);
+    ValueTask ReportNoResultsAsync(string message, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Report a informational message to be displayed to the user.  This may appear to the user in the results
+    /// Report a message to be displayed to the user. This may appear to the user in the results
     /// UI in some fashion (for example: in an info-bar).
     /// </summary>
-    ValueTask ReportInformationalMessageAsync(string message, CancellationToken cancellationToken);
+    ValueTask ReportMessageAsync(string message, NotificationSeverity severity, CancellationToken cancellationToken);
 
     /// <summary>
     /// Set the title of the window that results are displayed in.
@@ -36,5 +35,5 @@ internal interface IFindUsagesContext
     ValueTask SetSearchTitleAsync(string title, CancellationToken cancellationToken);
 
     ValueTask OnDefinitionFoundAsync(DefinitionItem definition, CancellationToken cancellationToken);
-    ValueTask OnReferenceFoundAsync(SourceReferenceItem reference, CancellationToken cancellationToken);
+    ValueTask OnReferencesFoundAsync(IAsyncEnumerable<SourceReferenceItem> references, CancellationToken cancellationToken);
 }

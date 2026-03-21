@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -11,7 +10,6 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.LanguageService;
 using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Shared.Extensions;
-using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp.Extensions;
 
@@ -111,11 +109,45 @@ internal static class ParenthesizedExpressionSyntaxExtensions
         if (expression.IsKind(SyntaxKind.TupleExpression))
             return true;
 
-        // int Prop => (x); -> int Prop => x;
-        if (nodeParent is ArrowExpressionClauseSyntax arrowExpressionClause && arrowExpressionClause.Expression == node)
+        // Cases:
+        //   {(x)} -> {x}
+        if (nodeParent is InitializerExpressionSyntax)
         {
+            // `{ ([]) }` can't become `{ [] }` as `[` in an initializer will be parsed as an index assignment.
+            if (tokenAfterParen.Kind() == SyntaxKind.OpenBracketToken)
+                return false;
+
+            // Assignment expressions and collection expressions are not allowed in initializers
+            // as they are not parsed as expressions, but as more complex constructs
+            if (expression is AssignmentExpressionSyntax)
+                return false;
+
             return true;
         }
+
+        // ([...]) -> [...]
+        if (expression is CollectionExpressionSyntax collectionExpression)
+        {
+            // For back compat, the language disallows a few forms of casting an collection expression.
+            // For example: `(A)[1, 2, 3]`.  This is because this form already has an interpretation as 
+            // indexing into a parenthesized expression.  Check for these cases and only allow if it is
+            // totally safe.  For example `(List<int>)[1, 2, 3]` is still safe as that was not a legal
+            // expression in the past.
+            //
+            // Note: because `(T)[]` is never legal (an empty indexer is not legal), that form is always
+            // considered a collection expression, regardless of what T is.
+            if (collectionExpression.Elements.Count == 0)
+                return true;
+
+            return parentExpression is not CastExpressionSyntax
+            {
+                Type: IdentifierNameSyntax or QualifiedNameSyntax { Right: IdentifierNameSyntax }
+            };
+        }
+
+        // int Prop => (x); -> int Prop => x;
+        if (nodeParent is ArrowExpressionClauseSyntax arrowExpressionClause && arrowExpressionClause.Expression == node)
+            return true;
 
         // Easy statement-level cases:
         //   var y = (x);           -> var y = x;
@@ -179,15 +211,6 @@ internal static class ParenthesizedExpressionSyntaxExtensions
             return true;
 
         // Cases:
-        //   {(x)} -> {x}
-        if (nodeParent is InitializerExpressionSyntax)
-        {
-            // Assignment expressions and collection expressions are not allowed in initializers
-            // as they are not parsed as expressions, but as more complex constructs
-            return expression is not AssignmentExpressionSyntax and not CollectionExpressionSyntax;
-        }
-
-        // Cases:
         //   new {(x)} -> {x}
         //   new { a = (x)} -> { a = x }
         //   new { a = (x = c)} -> { a = x = c }
@@ -219,12 +242,30 @@ internal static class ParenthesizedExpressionSyntaxExtensions
         //   (null)    -> null
         //   (default) -> default;
         //   (1)       -> 1
-        if (expression.IsAnyLiteralExpression())
+        if (expression is LiteralExpressionSyntax)
+            return true;
+
+        // (typeof(int)) -> typeof(int)
+        // (default(int)) -> default(int)
+        // (checked(1)) -> checked(1)
+        // (unchecked(1)) -> unchecked(1)
+        // (sizeof(int)) -> sizeof(int)
+        if (expression is TypeOfExpressionSyntax or DefaultExpressionSyntax or CheckedExpressionSyntax or SizeOfExpressionSyntax)
             return true;
 
         // (this)   -> this
         if (expression.IsKind(SyntaxKind.ThisExpression))
             return true;
+
+        // x is > (-1)  ->  x is > -1
+        //
+        // Note: the general case of removing parens from a prefix unary expression in a normal expression is handled as
+        // the last step of this algorithm below.  This is only the pattern case.
+        if (expression is PrefixUnaryExpressionSyntax prefixUnary &&
+            parentExpression is null)
+        {
+            return true;
+        }
 
         // x ?? (throw ...) -> x ?? throw ...
         if (expression.IsKind(SyntaxKind.ThrowExpression) &&
@@ -247,7 +288,14 @@ internal static class ParenthesizedExpressionSyntaxExtensions
 
         // case x when (y): -> case x when y:
         if (nodeParent.IsKind(SyntaxKind.WhenClause))
-            return true;
+        {
+            // Subtle case: `when (a || x?[0]):` cannot have parentheses removed because it would become
+            // `when a || x?[0]:` which the parser interprets as `when a || x ? [0] :` (a ternary expression)
+            // instead of the intended conditional access `x?[0]` followed by the `:` from when clause syntax.
+            // To avoid this, we check if removing parentheses would put a conditional access at the end of the
+            // expression (on the rightmost path), immediately before the `:`.
+            return !ContainsConditionalAccessOnRightmostPath(expression);
+        }
 
         // #if (x)   ->   #if x
         if (nodeParent is DirectiveTriviaSyntax)
@@ -256,6 +304,13 @@ internal static class ParenthesizedExpressionSyntaxExtensions
         // Switch expression arm
         // x => (y)
         if (nodeParent is SwitchExpressionArmSyntax arm && arm.Expression == node)
+            return true;
+
+        // [.. (expr)]    ->    [.. expr]
+        //
+        // Note: There is no precedence with `..` it's always just part of the collection expr, with the expr being
+        // parsed independently of it.  That's why no parens are ever needed here.
+        if (nodeParent is SpreadElementSyntax)
             return true;
 
         // If we have: (X)(++x) or (X)(--x), we don't want to remove the parens. doing so can
@@ -286,6 +341,22 @@ internal static class ParenthesizedExpressionSyntaxExtensions
         // - If the parent is not an expression, do not remove parentheses
         // - Otherwise, parentheses may be removed if doing so does not change operator associations.
         return parentExpression != null && !RemovalChangesAssociation(node, parentExpression, semanticModel);
+
+        static bool ContainsConditionalAccessOnRightmostPath(ExpressionSyntax expr)
+        {
+            // Walk down the rightmost path of the expression tree
+            for (var current = expr; current != null;)
+            {
+                if (current is ConditionalAccessExpressionSyntax)
+                    return true;
+
+                current = current is BinaryExpressionSyntax binaryExpression
+                    ? binaryExpression.Right
+                    : current.ChildNodes().FirstOrDefault() as ExpressionSyntax;
+            }
+
+            return false;
+        }
     }
 
     private static bool RemovalWouldChangeConstantReferenceToTypeReference(
@@ -330,35 +401,27 @@ internal static class ParenthesizedExpressionSyntaxExtensions
         // they include any : or :: tokens. If they do, we can't remove the parentheses because
         // the parser would assume that the first : would begin the format clause of the interpolation.
 
-        var stack = s_nodeStackPool.AllocateAndClear();
-        try
+        using var _ = s_nodeStackPool.GetPooledObject(out var stack);
+        stack.Push(node.Expression);
+
+        while (stack.TryPop(out var expression))
         {
-            stack.Push(node.Expression);
-
-            while (stack.Count > 0)
+            foreach (var nodeOrToken in expression.ChildNodesAndTokens())
             {
-                var expression = stack.Pop();
-
-                foreach (var nodeOrToken in expression.ChildNodesAndTokens())
+                // Note: There's no need drill into other parenthesized expressions, since any colons in them would be unambiguous.
+                if (nodeOrToken.AsNode(out var childNode))
                 {
-                    // Note: There's no need drill into other parenthesized expressions, since any colons in them would be unambiguous.
-                    if (nodeOrToken.IsNode && !nodeOrToken.IsKind(SyntaxKind.ParenthesizedExpression))
+                    if (!childNode.IsKind(SyntaxKind.ParenthesizedExpression))
+                        stack.Push(childNode);
+                }
+                else if (nodeOrToken.IsToken)
+                {
+                    if (nodeOrToken.Kind() is SyntaxKind.ColonToken or SyntaxKind.ColonColonToken)
                     {
-                        stack.Push(nodeOrToken.AsNode()!);
-                    }
-                    else if (nodeOrToken.IsToken)
-                    {
-                        if (nodeOrToken.Kind() is SyntaxKind.ColonToken or SyntaxKind.ColonColonToken)
-                        {
-                            return true;
-                        }
+                        return true;
                     }
                 }
             }
-        }
-        finally
-        {
-            s_nodeStackPool.ClearAndFree(stack);
         }
 
         return false;
@@ -739,16 +802,16 @@ internal static class ParenthesizedExpressionSyntaxExtensions
     {
         switch (pattern)
         {
-            case ConstantPatternSyntax _:
-            case DiscardPatternSyntax _:
-            case DeclarationPatternSyntax _:
-            case RecursivePatternSyntax _:
-            case TypePatternSyntax _:
-            case VarPatternSyntax _:
+            case ConstantPatternSyntax:
+            case DiscardPatternSyntax:
+            case DeclarationPatternSyntax:
+            case RecursivePatternSyntax:
+            case TypePatternSyntax:
+            case VarPatternSyntax:
                 return OperatorPrecedence.Primary;
 
-            case UnaryPatternSyntax _:
-            case RelationalPatternSyntax _:
+            case UnaryPatternSyntax:
+            case RelationalPatternSyntax:
                 return OperatorPrecedence.Unary;
 
             case BinaryPatternSyntax binaryPattern:

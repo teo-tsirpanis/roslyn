@@ -7,15 +7,15 @@ using System.Threading;
 using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.Host.Mef;
 using Microsoft.CodeAnalysis.Shared.Extensions;
-using Microsoft.CodeAnalysis.SolutionCrawler;
 using Microsoft.CodeAnalysis.Text;
+using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.Editor.Shared.Preview;
 
 internal class PreviewWorkspace : Workspace
 {
     public PreviewWorkspace()
-    : base(MefHostServices.DefaultHost, WorkspaceKind.Preview)
+        : base(MefHostServices.DefaultHost, WorkspaceKind.Preview)
     {
     }
 
@@ -32,9 +32,29 @@ internal class PreviewWorkspace : Workspace
         this.RaiseWorkspaceChangedEventAsync(WorkspaceChangeKind.SolutionChanged, oldSolution, newSolution);
     }
 
-    public void EnableSolutionCrawler()
+    public static ReferenceCountedDisposable<PreviewWorkspace> CreateWithDocumentContents(
+        TextDocument document, SourceTextContainer textContainer)
     {
-        Services.GetRequiredService<ISolutionCrawlerRegistrationService>().Register(this);
+        // Ensure the solution's view of this file is consistent across all linked files within it.
+
+        // Performance: Replace the SourceText of all related documents in this 
+        // workspace. This prevents cascading forks as taggers call to
+        // GetOpenTextDocumentInCurrentContextWithChanges would eventually wind up
+        // calling Solution.WithDocumentText using the related ids.
+        var newSolution = document.Project.Solution.WithDocumentText(
+            document.Project.Solution.GetRelatedDocumentIds(document.Id),
+            textContainer.CurrentText,
+            PreservationMode.PreserveIdentity);
+
+        // Ensure we don't leak the preview workspace in the event that an exception happens below.
+        using var previewWorkspace = new ReferenceCountedDisposable<PreviewWorkspace>(new PreviewWorkspace(newSolution));
+
+        // TODO: Determine if this is necesarry.  Existing code comments mention that this is needed so that things
+        // like the LightBulb work.  But it is unclear if that's actually the case.  It is possible some features
+        // may do things slightly differently if a doc is open or not.  But those cases should be rare.
+        previewWorkspace.Target.OpenDocument(document.Id, textContainer);
+
+        return previewWorkspace.TryAddReference() ?? throw ExceptionUtilities.Unreachable();
     }
 
     public override bool CanApplyChange(ApplyChangesKind feature)
@@ -107,7 +127,6 @@ internal class PreviewWorkspace : Workspace
     {
         base.Dispose(finalize);
 
-        Services.GetRequiredService<ISolutionCrawlerRegistrationService>().Unregister(this);
         ClearSolution();
     }
 }

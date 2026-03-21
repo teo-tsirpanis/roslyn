@@ -3,20 +3,16 @@
 // See the LICENSE file in the project root for more information.
 
 extern alias Scripting;
-
 using System;
-using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
 using System.IO.Pipes;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.ErrorReporting;
 using Roslyn.Utilities;
-using StreamJsonRpc;
 using Scripting::Microsoft.CodeAnalysis.Scripting.Hosting;
+using StreamJsonRpc;
 
 namespace Microsoft.CodeAnalysis.Interactive
 {
@@ -34,7 +30,7 @@ namespace Microsoft.CodeAnalysis.Interactive
 
             public LazyRemoteService(InteractiveHost host, InteractiveHostOptions options, int instanceId, bool skipInitialization)
             {
-                _lazyInitializedService = AsyncLazy.Create(TryStartAndInitializeProcessAsync);
+                _lazyInitializedService = AsyncLazy.Create(static (self, cancellationToken) => self.TryStartAndInitializeProcessAsync(cancellationToken), this);
                 _cancellationSource = new CancellationTokenSource();
                 InstanceId = instanceId;
                 Options = options;
@@ -77,13 +73,13 @@ namespace Microsoft.CodeAnalysis.Interactive
                     {
                         result = new RemoteExecutionResult(
                             success: true,
-                            sourcePaths: ImmutableArray<string>.Empty,
-                            referencePaths: ImmutableArray<string>.Empty,
+                            sourcePaths: [],
+                            referencePaths: [],
                             workingDirectory: Host._initialWorkingDirectory,
                             initializationResult: new RemoteInitializationResult(
                                 initializationScript: null,
-                                metadataReferencePaths: ImmutableArray.Create(typeof(object).Assembly.Location, typeof(InteractiveScriptGlobals).Assembly.Location),
-                                imports: ImmutableArray<string>.Empty));
+                                metadataReferencePaths: [typeof(object).Assembly.Location, typeof(InteractiveScriptGlobals).Assembly.Location],
+                                imports: []));
 
                         Host.ProcessInitialized?.Invoke(remoteService.PlatformInfo, Options, result);
                         return new InitializedRemoteService(remoteService, result);
@@ -184,10 +180,10 @@ namespace Microsoft.CodeAnalysis.Interactive
                     newProcessId = 0;
                 }
 
-                var clientStream = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                var clientStream = NamedPipeUtil.CreateClient(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
                 JsonRpc? jsonRpc = null;
 
-                void ProcessExitedBeforeEstablishingConnection(object sender, EventArgs e)
+                void ProcessExitedBeforeEstablishingConnection(object? sender, EventArgs e)
                 {
                     Host.InteractiveHostProcessCreationFailed?.Invoke(null, TryGetExitCode(newProcess));
                     _cancellationSource.Cancel();
@@ -211,7 +207,7 @@ namespace Microsoft.CodeAnalysis.Interactive
 
                     platformInfo = (await jsonRpc.InvokeWithCancellationAsync<InteractiveHostPlatformInfo.Data>(
                         nameof(Service.InitializeAsync),
-                        new object[] { Host._replServiceProviderType.AssemblyQualifiedName },
+                        new object?[] { Host._replServiceProviderType.AssemblyQualifiedName },
                         cancellationToken).ConfigureAwait(false)).Deserialize();
                 }
                 catch (Exception e)

@@ -13,6 +13,7 @@ using Microsoft.CodeAnalysis.Completion;
 using Microsoft.CodeAnalysis.Completion.Providers;
 using Microsoft.CodeAnalysis.CSharp.Extensions;
 using Microsoft.CodeAnalysis.CSharp.Extensions.ContextQuery;
+using Microsoft.CodeAnalysis.CSharp.Snippets;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.ErrorReporting;
 using Microsoft.CodeAnalysis.Host;
@@ -26,39 +27,37 @@ using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp.Completion.Providers;
 
-[ExportCompletionProvider(nameof(SnippetCompletionProvider), LanguageNames.CSharp)]
+[ExportCompletionProvider(nameof(SnippetCompletionProvider), LanguageNames.CSharp), Shared]
 [ExtensionOrder(After = nameof(CrefCompletionProvider))]
-[Shared]
-internal sealed class SnippetCompletionProvider : LSPCompletionProvider
+[method: ImportingConstructor]
+[method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
+internal sealed class SnippetCompletionProvider() : LSPCompletionProvider
 {
     private static readonly HashSet<string> s_snippetsWithReplacements =
     [
-        "class",
-        "cw",
-        "ctor",
-        "else",
-        "enum",
-        "for",
-        "forr",
-        "foreach",
-        "if",
-        "interface",
-        "lock",
-        "prop",
-        "propg",
-        "sim",
-        "struct",
-        "svm",
-        "while"
+        CSharpSnippetIdentifiers.Class,
+        CommonSnippetIdentifiers.ConsoleWriteLine,
+        CommonSnippetIdentifiers.Constructor,
+        CSharpSnippetIdentifiers.Do,
+        CSharpSnippetIdentifiers.Else,
+        CSharpSnippetIdentifiers.Enum,
+        CSharpSnippetIdentifiers.For,
+        CSharpSnippetIdentifiers.ReversedFor,
+        CSharpSnippetIdentifiers.ForEach,
+        CSharpSnippetIdentifiers.If,
+        CSharpSnippetIdentifiers.Interface,
+        CSharpSnippetIdentifiers.Lock,
+        CommonSnippetIdentifiers.Property,
+        CommonSnippetIdentifiers.GetOnlyProperty,
+        CSharpSnippetIdentifiers.StaticIntMain,
+        CSharpSnippetIdentifiers.Struct,
+        CSharpSnippetIdentifiers.StaticVoidMain,
+        CSharpSnippetIdentifiers.Unsafe,
+        CSharpSnippetIdentifiers.Using,
+        CSharpSnippetIdentifiers.While
     ];
 
     internal override bool IsSnippetProvider => true;
-
-    [ImportingConstructor]
-    [Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
-    public SnippetCompletionProvider()
-    {
-    }
 
     internal override string Language => LanguageNames.CSharp;
 
@@ -87,7 +86,7 @@ internal sealed class SnippetCompletionProvider : LSPCompletionProvider
 
                 context.AddItems(await document.GetUnionItemsFromDocumentAndLinkedDocumentsAsync(
                     UnionCompletionItemComparer.Instance,
-                    d => GetSnippetsForDocumentAsync(d, context, cancellationToken)).ConfigureAwait(false));
+                    document => GetSnippetsForDocumentAsync(document, context, cancellationToken)).ConfigureAwait(false));
             }
         }
         catch (Exception e) when (FatalError.ReportAndCatchUnlessCanceled(e, ErrorSeverity.General))

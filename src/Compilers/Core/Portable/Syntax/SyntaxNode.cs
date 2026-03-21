@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.ErrorReporting;
 using Microsoft.CodeAnalysis.Text;
 using Roslyn.Utilities;
@@ -253,7 +254,7 @@ namespace Microsoft.CodeAnalysis
             SyntaxNode? value = null;
             if (slot?.TryGetTarget(out value) == true)
             {
-                return value!;
+                return value;
             }
 
             return CreateWeakItem(ref slot, index);
@@ -272,7 +273,7 @@ namespace Microsoft.CodeAnalysis
                 WeakReference<SyntaxNode>? previousWeakReference = slot;
                 if (previousWeakReference?.TryGetTarget(out previousNode) == true)
                 {
-                    return previousNode!;
+                    return previousNode;
                 }
 
                 if (Interlocked.CompareExchange(ref slot, newWeakReference, previousWeakReference) == previousWeakReference)
@@ -325,9 +326,9 @@ namespace Microsoft.CodeAnalysis
         /// <exception cref="ArgumentException"><paramref name="checksumAlgorithm"/> is not supported.</exception>
         public SourceText GetText(Encoding? encoding = null, SourceHashAlgorithm checksumAlgorithm = SourceHashAlgorithm.Sha1)
         {
-            var builder = new StringBuilder(this.Green.FullWidth);
-            this.WriteTo(new StringWriter(builder));
-            return new StringBuilderText(builder, encoding, checksumAlgorithm);
+            var writer = SourceTextWriter.Create(encoding, checksumAlgorithm, this.Green.FullWidth);
+            this.WriteTo(writer);
+            return writer.ToSourceText();
         }
 
         /// <summary>
@@ -794,17 +795,18 @@ namespace Microsoft.CodeAnalysis
         }
 
         /// <summary>
-        /// Gets a list of ancestor nodes
+        /// Gets a list of ancestor nodes in order from the innermost containing syntactic ancestor to the outermost.
         /// </summary>
         public IEnumerable<SyntaxNode> Ancestors(bool ascendOutOfTrivia = true)
         {
-            return this.Parent?
+            var parent = GetParent(this, ascendOutOfTrivia);
+            return parent?
                 .AncestorsAndSelf(ascendOutOfTrivia) ??
                 SpecializedCollections.EmptyEnumerable<SyntaxNode>();
         }
 
         /// <summary>
-        /// Gets a list of ancestor nodes (including this node) 
+        /// Gets a list of ancestor nodes (including this node) in order from this node to the outermost ancestor.
         /// </summary>
         public IEnumerable<SyntaxNode> AncestorsAndSelf(bool ascendOutOfTrivia = true)
         {
@@ -830,7 +832,8 @@ namespace Microsoft.CodeAnalysis
         }
 
         /// <summary>
-        /// Gets the first node of type TNode that matches the predicate.
+        /// Gets the first node of type TNode that matches the predicate. Ancestors are searched in order from
+        /// this node to the outermost ancestor.
         /// </summary>
         public TNode? FirstAncestorOrSelf<TNode>(Func<TNode, bool>? predicate = null, bool ascendOutOfTrivia = true)
             where TNode : SyntaxNode
@@ -848,7 +851,8 @@ namespace Microsoft.CodeAnalysis
         }
 
         /// <summary>
-        /// Gets the first node of type TNode that matches the predicate.
+        /// Gets the first node of type TNode that matches the predicate. Ancestors are searched in order from
+        /// this node to the outermost ancestor.
         /// </summary>
         [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Required for consistent API usage patterns.")]
         public TNode? FirstAncestorOrSelf<TNode, TArg>(Func<TNode, TArg, bool> predicate, TArg argument, bool ascendOutOfTrivia = true)

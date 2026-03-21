@@ -6,6 +6,7 @@ using System;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Text;
 
 namespace Microsoft.CodeAnalysis
 {
@@ -20,8 +21,7 @@ namespace Microsoft.CodeAnalysis
                                       DriverStateTable stateTable,
                                       SyntaxStore syntaxStore,
                                       GeneratorDriverOptions driverOptions,
-                                      TimeSpan runtime,
-                                      bool parseOptionsChanged)
+                                      TimeSpan runtime)
         {
             Generators = sourceGenerators;
             IncrementalGenerators = incrementalGenerators;
@@ -35,7 +35,6 @@ namespace Microsoft.CodeAnalysis
             DisabledOutputs = driverOptions.DisabledOutputs;
             TrackIncrementalSteps = driverOptions.TrackIncrementalGeneratorSteps;
             RunTime = runtime;
-            ParseOptionsChanged = parseOptionsChanged;
             Debug.Assert(Generators.Length == GeneratorStates.Length);
             Debug.Assert(IncrementalGenerators.Length == GeneratorStates.Length);
         }
@@ -82,6 +81,8 @@ namespace Microsoft.CodeAnalysis
         /// </summary>
         internal string? BaseDirectory => _driverOptions.BaseDirectory;
 
+        internal SourceHashAlgorithm ChecksumAlgorithm => _driverOptions.ChecksumAlgorithm;
+
         /// <summary>
         /// ParseOptions to use when parsing generator provided source.
         /// </summary>
@@ -104,11 +105,6 @@ namespace Microsoft.CodeAnalysis
         // https://github.com/dotnet/roslyn/issues/72129: Change from field to property once issue is addressed
         internal readonly bool TrackIncrementalSteps;
 
-        /// <summary>
-        /// Tracks if the <see cref="ParseOptions"/> have been changed meaning post init trees will need to be re-parsed.
-        /// </summary>
-        internal readonly bool ParseOptionsChanged;
-
         internal GeneratorDriverState With(
             ImmutableArray<ISourceGenerator>? sourceGenerators = null,
             ImmutableArray<IIncrementalGenerator>? incrementalGenerators = null,
@@ -118,8 +114,7 @@ namespace Microsoft.CodeAnalysis
             SyntaxStore? syntaxStore = null,
             ParseOptions? parseOptions = null,
             AnalyzerConfigOptionsProvider? optionsProvider = null,
-            TimeSpan? runTime = null,
-            bool? parseOptionsChanged = null)
+            TimeSpan? runTime = null)
         {
             return new GeneratorDriverState(
                 parseOptions ?? this.ParseOptions,
@@ -131,8 +126,7 @@ namespace Microsoft.CodeAnalysis
                 stateTable ?? this.StateTable,
                 syntaxStore ?? this.SyntaxStore,
                 this._driverOptions,
-                runTime ?? this.RunTime,
-                parseOptionsChanged ?? this.ParseOptionsChanged
+                runTime ?? this.RunTime
                 );
         }
     }

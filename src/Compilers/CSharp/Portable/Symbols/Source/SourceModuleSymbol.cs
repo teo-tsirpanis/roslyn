@@ -13,6 +13,7 @@ using System.Linq;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using System.Threading;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.CSharp.Emit;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.PooledObjects;
@@ -244,6 +245,16 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                                 ValidateLinkedAssemblies(diagnostics, cancellationToken);
                             }
 
+                            // If "data section string literals" are enabled, check the necessary APIs are available so used assemblies are tracked correctly.
+                            if (this.DeclaringCompilation.DataSectionStringLiteralThreshold != null)
+                            {
+                                diagnostics ??= BindingDiagnosticBag.GetInstance();
+                                _ = Binder.GetWellKnownTypeMember(this.DeclaringCompilation, WellKnownMember.System_Text_Encoding__get_UTF8, diagnostics, NoLocation.Singleton);
+                                _ = Binder.GetWellKnownTypeMember(this.DeclaringCompilation, WellKnownMember.System_Text_Encoding__GetString, diagnostics, NoLocation.Singleton);
+                            }
+
+                            AddMemorySafetyRulesAttributeIfNeeded(ref diagnostics);
+
                             if (_state.NotePartComplete(CompletionPart.StartValidatingReferencedAssemblies))
                             {
                                 if (diagnostics != null)
@@ -273,6 +284,9 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
                         if (this.GlobalNamespace.HasComplete(CompletionPart.MembersCompleted))
                         {
+                            // Completing the global namespace members means all InterceptsLocationAttributes have been bound.
+                            Volatile.Write(ref DeclaringCompilation.InterceptorsDiscoveryComplete, true);
+
                             _state.NotePartComplete(CompletionPart.MembersCompleted);
                         }
                         else
@@ -295,7 +309,24 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 _state.SpinWaitComplete(incompletePart, cancellationToken);
             }
         }
-#nullable disable
+
+        private void AddMemorySafetyRulesAttributeIfNeeded(ref BindingDiagnosticBag? diagnostics)
+        {
+            if (UseUpdatedMemorySafetyRules)
+            {
+                var needsDiagnostics = DeclaringCompilation.Options.OutputKind == OutputKind.NetModule;
+
+                if (needsDiagnostics)
+                {
+                    diagnostics ??= BindingDiagnosticBag.GetInstance();
+                }
+
+                DeclaringCompilation.EnsureMemorySafetyRulesAttributeExists(
+                    needsDiagnostics ? diagnostics : null,
+                    Location.None,
+                    modifyCompilation: true);
+            }
+        }
 
         private void ValidateLinkedAssemblies(BindingDiagnosticBag diagnostics, CancellationToken cancellationToken)
         {
@@ -321,6 +352,82 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 }
             }
         }
+
+        internal void DiscoverInterceptorsIfNeeded()
+        {
+            if (!Volatile.Read(ref DeclaringCompilation.InterceptorsDiscoveryComplete))
+            {
+                discoverInterceptors();
+                Volatile.Write(ref DeclaringCompilation.InterceptorsDiscoveryComplete, true);
+            }
+
+            void discoverInterceptors()
+            {
+                var location = this.GlobalNamespace.GetFirstLocationOrNone();
+                if (!location.IsInSource)
+                {
+                    return;
+                }
+
+                var toVisit = ArrayBuilder<NamespaceOrTypeSymbol>.GetInstance();
+
+                // Search the namespaces which were indicated to contain interceptors.
+                ImmutableArray<ImmutableArray<string>> interceptorsNamespaces = ((CSharpParseOptions)location.SourceTree.Options).InterceptorsNamespaces;
+                foreach (ImmutableArray<string> namespaceParts in interceptorsNamespaces)
+                {
+                    if (namespaceParts is ["global"])
+                    {
+                        toVisit.Clear();
+                        toVisit.Add(GlobalNamespace);
+                        // No point in continuing, we already are going to search the entire module in this case.
+                        break;
+                    }
+
+                    var cursor = GlobalNamespace;
+                    foreach (string namespacePart in namespaceParts)
+                    {
+                        cursor = (NamespaceSymbol?)cursor.GetNestedNamespace(namespacePart);
+                        if (cursor is null)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (cursor is not null)
+                    {
+                        toVisit.Add(cursor);
+                    }
+                }
+
+                while (toVisit.Count > 0)
+                {
+                    var item = toVisit.Pop();
+                    if (item is SourceMemberContainerTypeSymbol type)
+                    {
+                        type.DiscoverInterceptors(toVisit);
+                    }
+                    else if (item is SourceNamespaceSymbol @namespace)
+                    {
+                        foreach (var member in @namespace.GetMembers())
+                        {
+                            if (member is not NamespaceOrTypeSymbol namespaceOrType)
+                            {
+                                throw ExceptionUtilities.UnexpectedValue(member);
+                            }
+
+                            toVisit.Add(namespaceOrType);
+                        }
+                    }
+                    else
+                    {
+                        throw ExceptionUtilities.UnexpectedValue(item);
+                    }
+                }
+
+                toVisit.Free();
+            }
+        }
+#nullable disable
 
         public override ImmutableArray<Location> Locations
         {
@@ -491,7 +598,11 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 }
             }
             else if (ReportExplicitUseOfReservedAttributes(in arguments,
-                ReservedAttributes.NullableContextAttribute | ReservedAttributes.NullablePublicOnlyAttribute | ReservedAttributes.RefSafetyRulesAttribute))
+                ReservedAttributes.NullableContextAttribute
+                | ReservedAttributes.NullablePublicOnlyAttribute
+                | ReservedAttributes.RefSafetyRulesAttribute
+                | ReservedAttributes.MemorySafetyRulesAttribute
+                | ReservedAttributes.ExtensionMarkerAttribute))
             {
             }
             else if (attribute.IsTargetAttribute(AttributeDescription.SkipLocalsInitAttribute))
@@ -520,7 +631,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             static bool isFeatureDisabled(CSharpCompilation compilation)
             {
                 var options = (CSharpParseOptions?)compilation.SyntaxTrees.FirstOrDefault()?.Options;
-                return options?.Features?.ContainsKey("noRefSafetyRulesAttribute") == true;
+                return options?.HasFeature(Feature.NoRefSafetyRulesAttribute) == true;
             }
 
             static bool namespaceIncludesTypeDeclarations(NamespaceSymbol ns)
@@ -543,7 +654,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             }
         }
 
-        internal override void AddSynthesizedAttributes(PEModuleBuilder moduleBuilder, ref ArrayBuilder<SynthesizedAttributeData> attributes)
+        internal override void AddSynthesizedAttributes(PEModuleBuilder moduleBuilder, ref ArrayBuilder<CSharpAttributeData> attributes)
         {
             base.AddSynthesizedAttributes(moduleBuilder, ref attributes);
 
@@ -562,6 +673,12 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             {
                 var version = ImmutableArray.Create(new TypedConstant(compilation.GetSpecialType(SpecialType.System_Int32), TypedConstantKind.Primitive, 11));
                 AddSynthesizedAttribute(ref attributes, moduleBuilder.SynthesizeRefSafetyRulesAttribute(version));
+            }
+
+            if (UseUpdatedMemorySafetyRules)
+            {
+                var version = ImmutableArray.Create(new TypedConstant(compilation.GetSpecialType(SpecialType.System_Int32), TypedConstantKind.Primitive, CSharpCompilationOptions.UpdatedMemorySafetyRulesVersion));
+                AddSynthesizedAttribute(ref attributes, moduleBuilder.TrySynthesizeMemorySafetyRulesAttribute(version));
             }
 
             if (moduleBuilder.ShouldEmitNullablePublicOnlyAttribute())
@@ -621,6 +738,16 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                     _lazyUseUpdatedEscapeRules = value.ToThreeState();
                 }
                 return _lazyUseUpdatedEscapeRules == ThreeState.True;
+            }
+        }
+
+        internal override bool UseUpdatedMemorySafetyRules
+        {
+            get
+            {
+                return _assemblySymbol.DeclaringCompilation.Options.UseUpdatedMemorySafetyRules ||
+                    // https://github.com/dotnet/roslyn/issues/82546: temporary way to opt in
+                    _assemblySymbol.DeclaringCompilation.Feature(Feature.UpdatedMemorySafetyRules) != null;
             }
         }
 

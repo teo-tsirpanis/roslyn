@@ -58,19 +58,16 @@ namespace Microsoft.CodeAnalysis.CSharp
             if (exprType?.IsWellKnownTypeLock() == true &&
                 TryFindLockTypeInfo(exprType, diagnostics, exprSyntax) is { } lockTypeInfo)
             {
-                CheckFeatureAvailability(exprSyntax, MessageID.IDS_LockObject, diagnostics);
+                CheckFeatureAvailability(exprSyntax, MessageID.IDS_FeatureLockObject, diagnostics);
 
                 // Report use-site errors for members we will use in lowering.
                 _ = diagnostics.ReportUseSite(lockTypeInfo.EnterScopeMethod, exprSyntax) ||
                     diagnostics.ReportUseSite(lockTypeInfo.ScopeType, exprSyntax) ||
                     diagnostics.ReportUseSite(lockTypeInfo.ScopeDisposeMethod, exprSyntax);
 
-                CheckRestrictedTypeInAsyncMethod(
-                    originalBinder.ContainingMemberOrLambda,
-                    lockTypeInfo.ScopeType,
-                    diagnostics,
-                    exprSyntax,
-                    errorCode: ErrorCode.ERR_BadSpecialByRefLock);
+                ReportDiagnosticsIfUnsafeMemberAccess(diagnostics, lockTypeInfo.EnterScopeMethod, exprSyntax);
+                AssertNotUnsafeMemberAccess(lockTypeInfo.ScopeType);
+                ReportDiagnosticsIfUnsafeMemberAccess(diagnostics, lockTypeInfo.ScopeDisposeMethod, exprSyntax);
             }
 
             BoundStatement stmt = originalBinder.BindPossibleEmbeddedStatement(_syntax.Statement, diagnostics);

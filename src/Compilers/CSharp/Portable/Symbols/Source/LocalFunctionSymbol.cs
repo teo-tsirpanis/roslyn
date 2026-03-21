@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Threading;
 using Microsoft.Cci;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.PooledObjects;
 using Roslyn.Utilities;
@@ -27,6 +28,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         private ImmutableArray<ImmutableArray<TypeWithAnnotations>> _lazyTypeParameterConstraintTypes;
         private ImmutableArray<TypeParameterConstraintKind> _lazyTypeParameterConstraintKinds;
         private TypeWithAnnotations.Boxed? _lazyReturnType;
+        private ImmutableArray<CustomModifier> _lazyRefCustomModifiers;
 
         // Lock for initializing lazy fields and registering their diagnostics
         // Acquire this lock when initializing lazy objects to guarantee their declaration
@@ -58,7 +60,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
             ScopeBinder = binder;
 
-            binder = binder.WithUnsafeRegionIfNecessary(syntax.Modifiers);
+            binder = binder.SetOrClearUnsafeRegionIfNecessary(syntax.Modifiers);
+            _binder = binder;
 
             if (syntax.TypeParameterList != null)
             {
@@ -85,8 +88,6 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             _declarationDiagnostics.AddRange(diagnostics.DiagnosticBag);
             _declarationDependencies.AddAll(diagnostics.DependenciesBag);
             diagnostics.Free();
-
-            _binder = binder;
         }
 
         /// <summary>
@@ -125,7 +126,17 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             GetReturnTypeAttributes();
 
             var compilation = DeclaringCompilation;
+            var location = Syntax.Identifier.GetLocation();
+
+            if (NeedsSynthesizedRequiresUnsafeAttribute)
+            {
+                Debug.Assert(CallerUnsafeMode == CallerUnsafeMode.Explicit);
+                MessageID.IDS_FeatureUnsafeEvolution.CheckFeatureAvailability(addTo, compilation, location);
+                Binder.GetWellKnownTypeMember(compilation, WellKnownMember.System_Diagnostics_CodeAnalysis_RequiresUnsafeAttribute__ctor, addTo, location);
+            }
+
             ParameterHelpers.EnsureRefKindAttributesExist(compilation, Parameters, addTo, modifyCompilation: false);
+            ParameterHelpers.EnsureParamCollectionAttributeExists(compilation, Parameters, addTo, modifyCompilation: false);
             ParameterHelpers.EnsureNativeIntegerAttributeExists(compilation, Parameters, addTo, modifyCompilation: false);
             ParameterHelpers.EnsureScopedRefAttributeExists(compilation, Parameters, addTo, modifyCompilation: false);
             ParameterHelpers.EnsureNullableAttributeExists(compilation, this, Parameters, addTo, modifyCompilation: false);
@@ -140,7 +151,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 ContainingSymbol is SynthesizedSimpleProgramEntryPointSymbol &&
                 compilation.HasEntryPointSignature(this, diagnostics).IsCandidate)
             {
-                addTo.Add(ErrorCode.WRN_MainIgnored, Syntax.Identifier.GetLocation(), this);
+                addTo.Add(ErrorCode.WRN_MainIgnored, location, this);
             }
 
             addTo.AddRangeAndFree(diagnostics);
@@ -181,7 +192,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
         private void ComputeParameters()
         {
-            if (_lazyParameters != null)
+            if (!RoslynImmutableInterlocked.VolatileRead(in _lazyParameters).IsDefault)
             {
                 return;
             }
@@ -201,6 +212,11 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 addRefReadOnlyModifier: false,
                 diagnostics: diagnostics).Cast<SourceParameterSymbol, ParameterSymbol>();
 
+            foreach (var parameter in this.Syntax.ParameterList.Parameters)
+            {
+                WithTypeParametersBinder.ReportFieldContextualKeywordConflictIfAny(parameter, diagnostics);
+            }
+
             // Note: we don't need to warn on annotations used in #nullable disable context for local functions, as this is handled in binding already
 
             var isVararg = arglistToken.Kind() == SyntaxKind.ArgListKeyword;
@@ -211,7 +227,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
             lock (_declarationDiagnostics)
             {
-                if (_lazyParameters != null)
+                if (!_lazyParameters.IsDefault)
                 {
                     diagnostics.Free();
                     return;
@@ -221,7 +237,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 _declarationDependencies.AddAll(diagnostics.DependenciesBag);
                 diagnostics.Free();
                 _lazyIsVarArg = isVararg;
-                _lazyParameters = parameters;
+                RoslynImmutableInterlocked.VolatileWrite(ref _lazyParameters, parameters);
             }
         }
 
@@ -261,6 +277,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 if (_refKind == RefKind.RefReadOnly)
                 {
                     compilation.EnsureIsReadOnlyAttributeExists(diagnostics, location ??= returnTypeSyntax.Location, modifyCompilation: false);
+                    Binder.GetWellKnownType(DeclaringCompilation, WellKnownType.System_Runtime_InteropServices_InAttribute, diagnostics, location ??= returnTypeSyntax.Location);
                 }
 
                 if (compilation.ShouldEmitNativeIntegerAttributes(returnType.Type))
@@ -339,7 +356,22 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
         internal override bool GenerateDebugInfo => true;
 
-        public override ImmutableArray<CustomModifier> RefCustomModifiers => ImmutableArray<CustomModifier>.Empty;
+        public override ImmutableArray<CustomModifier> RefCustomModifiers
+        {
+            get
+            {
+                if (_lazyRefCustomModifiers.IsDefault)
+                {
+                    ImmutableInterlocked.InterlockedInitialize(
+                        ref _lazyRefCustomModifiers,
+                        (_refKind == RefKind.RefReadOnly && DeclaringCompilation is { } compilation) ?
+                            [CSharpCustomModifier.CreateRequired(compilation.GetWellKnownType(WellKnownType.System_Runtime_InteropServices_InAttribute))] :
+                            []);
+                }
+
+                return _lazyRefCustomModifiers;
+            }
+        }
 
         internal override CallingConvention CallingConvention => CallingConvention.Default;
 
@@ -368,7 +400,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
         public override bool IsExtern => (_declarationModifiers & DeclarationModifiers.Extern) != 0;
 
-        public bool IsUnsafe => (_declarationModifiers & DeclarationModifiers.Unsafe) != 0;
+        internal override bool IsUnsafe => (_declarationModifiers & DeclarationModifiers.Unsafe) != 0;
 
         internal bool IsExpressionBodied => Syntax is { Body: null, ExpressionBody: object _ };
 
@@ -378,7 +410,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
         internal override bool IsMetadataNewSlot(bool ignoreInterfaceImplementationChanges = false) => false;
 
-        internal override bool IsMetadataVirtual(bool ignoreInterfaceImplementationChanges = false) => false;
+        internal override bool IsMetadataVirtual(IsMetadataVirtualOption option = IsMetadataVirtualOption.None) => false;
 
         internal override int CalculateLocalSyntaxOffset(int localPosition, SyntaxTree localTree)
         {
@@ -451,13 +483,14 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                     diagnostics.Add(typeError, location, name, tpEnclosing.ContainingSymbol);
                 }
 
-                var typeParameter = new SourceMethodTypeParameterSymbol(
+                var typeParameter = new SourceNotOverridingMethodTypeParameterSymbol(
                         this,
                         name,
                         ordinal,
                         ImmutableArray.Create(location),
                         ImmutableArray.Create(parameter.GetReference()));
 
+                _binder.ReportFieldContextualKeywordConflictIfAny(typeParameter, parameter, identifier, diagnostics);
                 result.Add(typeParameter);
             }
 

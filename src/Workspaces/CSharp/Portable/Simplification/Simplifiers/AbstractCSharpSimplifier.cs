@@ -10,13 +10,11 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Extensions;
-using Microsoft.CodeAnalysis.CSharp.Formatting;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Shared.Utilities;
 using Microsoft.CodeAnalysis.Simplification;
 using Microsoft.CodeAnalysis.Simplification.Simplifiers;
-using Microsoft.CodeAnalysis.Text;
 using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp.Simplification.Simplifiers;
@@ -62,12 +60,8 @@ internal abstract class AbstractCSharpSimplifier<TSyntax, TSimplifiedSyntax>
         if (kind != SyntaxKind.None)
             return SyntaxFactory.Token(kind);
 
-        if (specialType is SpecialType.System_IntPtr or SpecialType.System_UIntPtr &&
-            semanticModel.SyntaxTree.Options.LanguageVersion() >= LanguageVersion.CSharp9 &&
-                semanticModel.Compilation.SupportsRuntimeCapability(RuntimeCapability.NumericIntPtr))
-        {
+        if (specialType is SpecialType.System_IntPtr or SpecialType.System_UIntPtr && semanticModel.UnifiesNativeIntegers())
             return SyntaxFactory.Identifier(specialType == SpecialType.System_IntPtr ? "nint" : "nuint");
-        }
 
         return null;
     }
@@ -144,7 +138,7 @@ internal abstract class AbstractCSharpSimplifier<TSyntax, TSimplifiedSyntax>
 
         // an alias can only replace a type or namespace
         if (symbol == null ||
-            (symbol.Kind != SymbolKind.Namespace && symbol.Kind != SymbolKind.NamedType))
+            symbol is { Kind: not SymbolKind.Namespace and not SymbolKind.NamedType })
         {
             return false;
         }

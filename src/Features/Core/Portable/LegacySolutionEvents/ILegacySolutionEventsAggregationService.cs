@@ -10,7 +10,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.Host.Mef;
-using static Microsoft.CodeAnalysis.EditAndContinue.TraceLog;
 
 namespace Microsoft.CodeAnalysis.LegacySolutionEvents;
 
@@ -23,16 +22,16 @@ internal interface ILegacySolutionEventsAggregationService : IWorkspaceService
 {
     bool ShouldReportChanges(SolutionServices services);
 
-    ValueTask OnWorkspaceChangedAsync(WorkspaceChangeEventArgs args, CancellationToken cancellationToken);
+    ValueTask OnWorkspaceChangedAsync(WorkspaceChangeEventArgs args, bool processSourceGeneratedDocuments, CancellationToken cancellationToken);
 }
 
 [ExportWorkspaceService(typeof(ILegacySolutionEventsAggregationService)), Shared]
 [method: ImportingConstructor]
 [method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
-internal class DefaultLegacySolutionEventsAggregationService(
+internal sealed class DefaultLegacySolutionEventsAggregationService(
     [ImportMany] IEnumerable<Lazy<ILegacySolutionEventsListener>> eventsServices) : ILegacySolutionEventsAggregationService
 {
-    private readonly ImmutableArray<Lazy<ILegacySolutionEventsListener>> _eventsServices = eventsServices.ToImmutableArray();
+    private readonly ImmutableArray<Lazy<ILegacySolutionEventsListener>> _eventsServices = [.. eventsServices];
 
     public bool ShouldReportChanges(SolutionServices services)
     {
@@ -45,9 +44,9 @@ internal class DefaultLegacySolutionEventsAggregationService(
         return false;
     }
 
-    public async ValueTask OnWorkspaceChangedAsync(WorkspaceChangeEventArgs args, CancellationToken cancellationToken)
+    public async ValueTask OnWorkspaceChangedAsync(WorkspaceChangeEventArgs args, bool processSourceGeneratedDocuments, CancellationToken cancellationToken)
     {
         foreach (var service in _eventsServices)
-            await service.Value.OnWorkspaceChangedAsync(args, cancellationToken).ConfigureAwait(false);
+            await service.Value.OnWorkspaceChangedAsync(args, processSourceGeneratedDocuments, cancellationToken).ConfigureAwait(false);
     }
 }

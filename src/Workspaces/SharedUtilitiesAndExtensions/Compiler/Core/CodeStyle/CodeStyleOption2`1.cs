@@ -10,28 +10,17 @@ using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace Microsoft.CodeAnalysis.CodeStyle;
 
-internal interface ICodeStyleOption
+/// <summary>
+/// Internal representation of a code style option value. Should be used throughout Roslyn.
+/// The internal values are translated to the public ones (ICodeStyleOption) at the public entry points.
+/// </summary>
+internal interface ICodeStyleOption2
 {
     XElement ToXElement();
     object? Value { get; }
     NotificationOption2 Notification { get; }
-    ICodeStyleOption WithValue(object value);
-    ICodeStyleOption WithNotification(NotificationOption2 notification);
-#if !CODE_STYLE
-    ICodeStyleOption AsInternalCodeStyleOption();
-    ICodeStyleOption AsPublicCodeStyleOption();
-#endif
-}
-
-internal interface ICodeStyleOption2 : ICodeStyleOption
-{
-    /// <summary>
-    /// Creates a new <see cref="ICodeStyleOption2"/> from a specified <paramref name="element"/>.
-    /// </summary>
-    /// <exception cref="Exception">
-    /// The type of the serialized data does not match the type of <see cref="ICodeStyleOption.Value"/> or the format of the serialized data is invalid.
-    /// </exception>
-    ICodeStyleOption2 FromXElement(XElement element);
+    ICodeStyleOption2 WithValue(object value);
+    ICodeStyleOption2 WithNotification(NotificationOption2 notification);
 }
 
 internal static class CodeStyleOption2
@@ -93,16 +82,9 @@ internal sealed partial class CodeStyleOption2<T>(T value, NotificationOption2 n
     [DataMember(Order = 1)]
     public NotificationOption2 Notification { get; } = notification;
 
-    object? ICodeStyleOption.Value => this.Value;
-    ICodeStyleOption ICodeStyleOption.WithValue(object value) => WithValue((T)value);
-    ICodeStyleOption ICodeStyleOption.WithNotification(NotificationOption2 notification) => new CodeStyleOption2<T>(Value, notification);
-
-#pragma warning disable RS0030 // Do not used banned APIs: CodeStyleOption<T>
-#if !CODE_STYLE
-    ICodeStyleOption ICodeStyleOption.AsPublicCodeStyleOption() => new CodeStyleOption<T>(this);
-    ICodeStyleOption ICodeStyleOption.AsInternalCodeStyleOption() => this;
-#endif
-#pragma warning restore
+    object? ICodeStyleOption2.Value => this.Value;
+    ICodeStyleOption2 ICodeStyleOption2.WithValue(object value) => WithValue((T)value);
+    ICodeStyleOption2 ICodeStyleOption2.WithNotification(NotificationOption2 notification) => new CodeStyleOption2<T>(Value, notification);
 
     public CodeStyleOption2<T> WithValue(T value)
     {
@@ -172,9 +154,9 @@ internal sealed partial class CodeStyleOption2<T>(T value, NotificationOption2 n
         return intVal is 0 or 1;
     }
 
-    ICodeStyleOption2 ICodeStyleOption2.FromXElement(XElement element)
-        => FromXElement(element);
-
+    /// <summary>
+    /// Called, using reflection, from VisualStudioSettingsOptionPersister.TryReadOptionValue.
+    /// </summary>
     public static CodeStyleOption2<T> FromXElement(XElement element)
     {
         var typeAttribute = element.Attribute(XmlAttribute_Type);

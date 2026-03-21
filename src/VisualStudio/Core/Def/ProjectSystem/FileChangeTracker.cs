@@ -9,10 +9,11 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.ErrorReporting;
-using IVsAsyncFileChangeEx2 = Microsoft.VisualStudio.Shell.IVsAsyncFileChangeEx2;
 using Microsoft.VisualStudio.Shell.Interop;
 using Roslyn.Utilities;
+using IVsAsyncFileChangeEx2 = Microsoft.VisualStudio.Shell.IVsAsyncFileChangeEx2;
 
 namespace Microsoft.VisualStudio.LanguageServices.Implementation.ProjectSystem;
 
@@ -20,10 +21,9 @@ internal sealed class FileChangeTracker : IVsFreeThreadedFileChangeEvents2, IDis
 {
     internal const _VSFILECHANGEFLAGS DefaultFileChangeFlags = _VSFILECHANGEFLAGS.VSFILECHG_Time | _VSFILECHANGEFLAGS.VSFILECHG_Add | _VSFILECHANGEFLAGS.VSFILECHG_Del | _VSFILECHANGEFLAGS.VSFILECHG_Size;
 
-    private static readonly AsyncLazy<uint?> s_none = new(value: null);
+    private static readonly AsyncLazy<uint?> s_none = AsyncLazy.Create(value: (uint?)null);
 
     private readonly IVsFileChangeEx _fileChangeService;
-    private readonly string _filePath;
     private readonly _VSFILECHANGEFLAGS _fileChangeFlags;
     private bool _disposed;
 
@@ -56,7 +56,7 @@ internal sealed class FileChangeTracker : IVsFreeThreadedFileChangeEvents2, IDis
     public FileChangeTracker(IVsFileChangeEx fileChangeService, string filePath, _VSFILECHANGEFLAGS fileChangeFlags = DefaultFileChangeFlags)
     {
         _fileChangeService = fileChangeService;
-        _filePath = filePath;
+        FilePath = filePath;
         _fileChangeFlags = fileChangeFlags;
         _fileChangeCookie = s_none;
     }
@@ -69,10 +69,7 @@ internal sealed class FileChangeTracker : IVsFreeThreadedFileChangeEvents2, IDis
         }
     }
 
-    public string FilePath
-    {
-        get { return _filePath; }
-    }
+    public string FilePath { get; }
 
     /// <summary>
     /// Returns true if a previous call to <see cref="StartFileChangeListeningAsync"/> has completed.
@@ -107,30 +104,34 @@ internal sealed class FileChangeTracker : IVsFreeThreadedFileChangeEvents2, IDis
 
         Contract.ThrowIfTrue(_fileChangeCookie != s_none);
 
-        _fileChangeCookie = new AsyncLazy<uint?>(async cancellationToken =>
-        {
-            try
+        _fileChangeCookie = AsyncLazy.Create(
+            static async (self, cancellationToken) =>
             {
-                // TODO: Should we pass in cancellationToken here insead of CancellationToken.None?
-                return await ((IVsAsyncFileChangeEx2)_fileChangeService).AdviseFileChangeAsync(_filePath, _fileChangeFlags, this, CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception e) when (ReportException(e))
+                try
+                {
+                    // TODO: Should we pass in cancellationToken here instead of CancellationToken.None?
+                    uint? result = await ((IVsAsyncFileChangeEx2)self._fileChangeService).AdviseFileChangeAsync(self.FilePath, self._fileChangeFlags, self, CancellationToken.None).ConfigureAwait(false);
+                    return result;
+                }
+                catch (Exception e) when (ReportException(e))
+                {
+                    return null;
+                }
+            },
+            static (self, cancellationToken) =>
             {
-                return null;
-            }
-        }, cancellationToken =>
-        {
-            try
-            {
-                Marshal.ThrowExceptionForHR(
-                    _fileChangeService.AdviseFileChange(_filePath, (uint)_fileChangeFlags, this, out var newCookie));
-                return newCookie;
-            }
-            catch (Exception e) when (ReportException(e))
-            {
-                return null;
-            }
-        });
+                try
+                {
+                    Marshal.ThrowExceptionForHR(
+                        self._fileChangeService.AdviseFileChange(self.FilePath, (uint)self._fileChangeFlags, self, out var newCookie));
+                    return newCookie;
+                }
+                catch (Exception e) when (ReportException(e))
+                {
+                    return null;
+                }
+            },
+            arg: this);
 
         lock (s_lastBackgroundTaskGate)
         {

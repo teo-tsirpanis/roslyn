@@ -2,33 +2,32 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-#nullable disable
-
 using System.Threading;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.PooledObjects;
-using Microsoft.CodeAnalysis.Shared.Collections;
 using Microsoft.CodeAnalysis.Structure;
 
 namespace Microsoft.CodeAnalysis.CSharp.Structure;
 
-internal class TypeDeclarationStructureProvider : AbstractSyntaxNodeStructureProvider<TypeDeclarationSyntax>
+internal sealed class TypeDeclarationStructureProvider : AbstractSyntaxNodeStructureProvider<TypeDeclarationSyntax>
 {
     protected override void CollectBlockSpans(
         SyntaxToken previousToken,
         TypeDeclarationSyntax typeDeclaration,
-        ref TemporaryArray<BlockSpan> spans,
+        ArrayBuilder<BlockSpan> spans,
         BlockStructureOptions options,
         CancellationToken cancellationToken)
     {
-        CSharpStructureHelpers.CollectCommentBlockSpans(typeDeclaration, ref spans, options);
+        CSharpStructureHelpers.CollectCommentBlockSpans(typeDeclaration, spans, options);
 
         if (!typeDeclaration.OpenBraceToken.IsMissing &&
             !typeDeclaration.CloseBraceToken.IsMissing)
         {
-            var lastToken = typeDeclaration.TypeParameterList == null
-                ? typeDeclaration.Identifier
-                : typeDeclaration.TypeParameterList.GetLastToken(includeZeroWidth: true);
+            var lastToken = typeDeclaration.TypeParameterList != null
+                ? typeDeclaration.TypeParameterList.GetLastToken(includeZeroWidth: true)
+                : typeDeclaration is ExtensionBlockDeclarationSyntax extensionBlock
+                    ? extensionBlock.Keyword
+                    : typeDeclaration.Identifier;
 
             SyntaxNodeOrToken current = typeDeclaration;
             var nextSibling = current.GetNextSibling();
@@ -54,7 +53,7 @@ internal class TypeDeclarationStructureProvider : AbstractSyntaxNodeStructurePro
         if (!typeDeclaration.CloseBraceToken.IsMissing)
         {
             var leadingTrivia = typeDeclaration.CloseBraceToken.LeadingTrivia;
-            CSharpStructureHelpers.CollectCommentBlockSpans(leadingTrivia, ref spans);
+            CSharpStructureHelpers.CollectCommentBlockSpans(leadingTrivia, spans);
         }
     }
 }

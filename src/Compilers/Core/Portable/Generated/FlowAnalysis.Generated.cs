@@ -5,6 +5,7 @@
 #nullable enable
 using System;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 using Microsoft.CodeAnalysis.PooledObjects;
 
@@ -54,7 +55,7 @@ namespace Microsoft.CodeAnalysis.FlowAnalysis
         /// </summary>
         CaptureId Id { get; }
         /// <summary>
-        /// True if this reference to the capture initializes the capture. Used when the capture is being initialized by being passed as an <code>out</code> parameter.
+        /// True if this reference to the capture initializes the capture. Used when the capture is being initialized by being passed as an <see langword="out" /> parameter.
         /// </summary>
         bool IsInitialization { get; }
     }
@@ -120,8 +121,10 @@ namespace Microsoft.CodeAnalysis.FlowAnalysis
     /// Represents an anonymous function operation in context of a <see cref="ControlFlowGraph" />.
     /// <para>
     /// Current usage:
-    ///  (1) C# lambda expression.
-    ///  (2) VB anonymous delegate expression.
+    /// <list type="number">
+    ///   <item><description>C# lambda expression</description></item>
+    ///   <item><description>VB anonymous delegate expression</description></item>
+    /// </list>
     /// </para>
     /// A <see cref="ControlFlowGraph" /> for the body of the anonymous function is available from
     /// the enclosing <see cref="ControlFlowGraph" />.

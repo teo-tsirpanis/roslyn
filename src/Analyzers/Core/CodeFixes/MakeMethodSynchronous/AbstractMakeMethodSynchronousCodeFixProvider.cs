@@ -26,7 +26,7 @@ internal abstract class AbstractMakeMethodSynchronousCodeFixProvider : CodeFixPr
 
     public override FixAllProvider GetFixAllProvider() => WellKnownFixAllProviders.BatchFixer;
 
-    public override Task RegisterCodeFixesAsync(CodeFixContext context)
+    public override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         var cancellationToken = context.CancellationToken;
         var diagnostic = context.Diagnostics.First();
@@ -37,13 +37,11 @@ internal abstract class AbstractMakeMethodSynchronousCodeFixProvider : CodeFixPr
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
-                    CodeFixesResources.Make_method_synchronous,
+                    AnalyzersResources.Make_method_synchronous,
                     cancellationToken => FixNodeAsync(context.Document, node, cancellationToken),
-                    nameof(CodeFixesResources.Make_method_synchronous)),
+                    nameof(AnalyzersResources.Make_method_synchronous)),
                 context.Diagnostics);
         }
-
-        return Task.CompletedTask;
     }
 
     private const string AsyncSuffix = "Async";
@@ -143,7 +141,7 @@ internal abstract class AbstractMakeMethodSynchronousCodeFixProvider : CodeFixPr
                 if (referencedSymbol != null)
                 {
                     return await RemoveAwaitFromCallersAsync(
-                        document.Project.Solution, referencedSymbol.Locations.ToImmutableArray(), cancellationToken).ConfigureAwait(false);
+                        document.Project.Solution, [.. referencedSymbol.Locations], cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -177,18 +175,14 @@ internal abstract class AbstractMakeMethodSynchronousCodeFixProvider : CodeFixPr
         var editor = new SyntaxEditor(root, currentSolution.Services);
 
         foreach (var location in group)
-        {
-            RemoveAwaitFromCallerIfPresent(editor, syntaxFactsService, root, location, cancellationToken);
-        }
+            RemoveAwaitFromCallerIfPresent(editor, syntaxFactsService, location, cancellationToken);
 
         var newRoot = editor.GetChangedRoot();
         return currentSolution.WithDocumentSyntaxRoot(document.Id, newRoot);
     }
 
     private static void RemoveAwaitFromCallerIfPresent(
-        SyntaxEditor editor, ISyntaxFactsService syntaxFacts,
-        SyntaxNode root, ReferenceLocation referenceLocation,
-        CancellationToken cancellationToken)
+        SyntaxEditor editor, ISyntaxFactsService syntaxFacts, ReferenceLocation referenceLocation, CancellationToken cancellationToken)
     {
         if (referenceLocation.IsImplicit)
         {

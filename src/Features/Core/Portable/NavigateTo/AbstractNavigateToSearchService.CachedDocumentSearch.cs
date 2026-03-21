@@ -4,7 +4,6 @@
 
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
@@ -14,15 +13,16 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.PatternMatching;
-using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Remote;
-using Microsoft.CodeAnalysis.Shared.Extensions;
+using Microsoft.CodeAnalysis.Shared.Utilities;
 using Microsoft.CodeAnalysis.Storage;
+using Microsoft.CodeAnalysis.Threading;
 using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.NavigateTo;
 
 using CachedIndexMap = ConcurrentDictionary<(IChecksummedPersistentStorageService service, DocumentKey documentKey, StringTable stringTable), AsyncLazy<TopLevelSyntaxTreeIndex?>>;
+using CachedFilterIndexMap = ConcurrentDictionary<(IChecksummedPersistentStorageService service, DocumentKey documentKey, StringTable stringTable), AsyncLazy<NavigateToSearchIndex?>>;
 
 internal abstract partial class AbstractNavigateToSearchService
 {
@@ -32,6 +32,12 @@ internal abstract partial class AbstractNavigateToSearchService
     /// (set to <see langword="null"/>) to release all cached data.
     /// </summary>
     private static CachedIndexMap? s_cachedIndexMap = [];
+
+    /// <summary>
+    /// Cached map from document key to the (potentially stale) lightweight filter index.  Loaded first
+    /// to quickly reject documents before loading the much larger <see cref="TopLevelSyntaxTreeIndex"/>.
+    /// </summary>
+    private static CachedFilterIndexMap? s_cachedFilterIndexMap = [];
 
     /// <summary>
     /// String table we use to dedupe common values while deserializing <see cref="SyntaxTreeIndex"/>s.  Once the 
@@ -44,16 +50,19 @@ internal abstract partial class AbstractNavigateToSearchService
         // Volatiles are technically not necessary due to automatic fencing of reference-type writes.  However,
         // i prefer the explicitness here as we are reading and writing these fields from different threads.
         Volatile.Write(ref s_cachedIndexMap, null);
+        Volatile.Write(ref s_cachedFilterIndexMap, null);
         Volatile.Write(ref s_stringTable, null);
     }
 
     private static bool ShouldSearchCachedDocuments(
         [NotNullWhen(true)] out CachedIndexMap? cachedIndexMap,
+        [NotNullWhen(true)] out CachedFilterIndexMap? cachedFilterIndexMap,
         [NotNullWhen(true)] out StringTable? stringTable)
     {
         cachedIndexMap = Volatile.Read(ref s_cachedIndexMap);
+        cachedFilterIndexMap = Volatile.Read(ref s_cachedFilterIndexMap);
         stringTable = Volatile.Read(ref s_stringTable);
-        return cachedIndexMap != null && stringTable != null;
+        return cachedIndexMap != null && cachedFilterIndexMap != null && stringTable != null;
     }
 
     public async Task SearchCachedDocumentsAsync(
@@ -63,17 +72,19 @@ internal abstract partial class AbstractNavigateToSearchService
         string searchPattern,
         IImmutableSet<string> kinds,
         Document? activeDocument,
-        Func<Project, INavigateToSearchResult, Task> onResultFound,
+        Func<ImmutableArray<INavigateToSearchResult>, Task> onResultsFound,
         Func<Task> onProjectCompleted,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        if (cancellationToken.IsCancellationRequested)
+            return;
+
         Contract.ThrowIfTrue(projects.IsEmpty);
         Contract.ThrowIfTrue(projects.Select(p => p.Language).Distinct().Count() != 1);
 
         Debug.Assert(priorityDocuments.All(d => projects.Contains(d.Project)));
 
-        var onItemFound = GetOnItemFoundCallback(solution, activeDocument, onResultFound, cancellationToken);
+        var onItemsFound = GetOnItemsFoundCallback(solution, activeDocument, onResultsFound);
 
         var documentKeys = projects.SelectManyAsArray(p => p.Documents.Select(DocumentKey.ToDocumentKey));
         var priorityDocumentKeys = priorityDocuments.SelectAsArray(DocumentKey.ToDocumentKey);
@@ -81,10 +92,10 @@ internal abstract partial class AbstractNavigateToSearchService
         var client = await RemoteHostClient.TryGetClientAsync(solution.Services, cancellationToken).ConfigureAwait(false);
         if (client != null)
         {
-            var callback = new NavigateToSearchServiceCallback(onItemFound, onProjectCompleted);
+            var callback = new NavigateToSearchServiceCallback(onItemsFound, onProjectCompleted, cancellationToken);
             await client.TryInvokeAsync<IRemoteNavigateToSearchService>(
                 (service, callbackId, cancellationToken) =>
-                    service.SearchCachedDocumentsAsync(documentKeys, priorityDocumentKeys, searchPattern, kinds.ToImmutableArray(), callbackId, cancellationToken),
+                    service.SearchCachedDocumentsAsync(documentKeys, priorityDocumentKeys, searchPattern, [.. kinds], callbackId, cancellationToken),
                 callback, cancellationToken).ConfigureAwait(false);
 
             return;
@@ -92,7 +103,7 @@ internal abstract partial class AbstractNavigateToSearchService
 
         var storageService = solution.Services.GetPersistentStorageService();
         await SearchCachedDocumentsInCurrentProcessAsync(
-            storageService, documentKeys, priorityDocumentKeys, searchPattern, kinds, onItemFound, onProjectCompleted, cancellationToken).ConfigureAwait(false);
+            storageService, documentKeys, priorityDocumentKeys, searchPattern, kinds, onItemsFound, onProjectCompleted, cancellationToken).ConfigureAwait(false);
     }
 
     public static async Task SearchCachedDocumentsInCurrentProcessAsync(
@@ -101,16 +112,14 @@ internal abstract partial class AbstractNavigateToSearchService
         ImmutableArray<DocumentKey> priorityDocumentKeys,
         string searchPattern,
         IImmutableSet<string> kinds,
-        Func<RoslynNavigateToItem, Task> onItemFound,
+        Func<ImmutableArray<RoslynNavigateToItem>, VoidResult, CancellationToken, Task> onItemsFound,
         Func<Task> onProjectCompleted,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
         // Quick abort if OOP is now fully loaded.
-        if (!ShouldSearchCachedDocuments(out _, out _))
+        if (!ShouldSearchCachedDocuments(out _, out _, out _))
             return;
 
-        // If the user created a dotted pattern then we'll grab the last part of the name
         var (patternName, patternContainer) = PatternMatcher.GetNameAndContainer(searchPattern);
         var declaredSymbolInfoKindsSet = new DeclaredSymbolInfoKindSet(kinds);
 
@@ -120,87 +129,81 @@ internal abstract partial class AbstractNavigateToSearchService
 
         using var _1 = GetPooledHashSet(priorityDocumentKeys, out var priorityDocumentKeysSet);
 
-        // Sort the groups into a high pri group (projects that contain a high-pri doc), and low pri groups (those
-        // that don't).
-        using var _2 = GetPooledHashSet(groups.Where(g => g.Any(priorityDocumentKeysSet.Contains)), out var highPriorityGroups);
-        using var _3 = GetPooledHashSet(groups.Where(g => !highPriorityGroups.Contains(g)), out var lowPriorityGroups);
-
-        await ProcessProjectGroupsAsync(highPriorityGroups).ConfigureAwait(false);
-        await ProcessProjectGroupsAsync(lowPriorityGroups).ConfigureAwait(false);
-
+        // Sort the groups into a high pri group (projects that contain a high-pri doc), and low pri groups (those that
+        // don't), and process in that order.
+        await ProducerConsumer<RoslynNavigateToItem>.RunParallelAsync(
+            Prioritize(groups, g => g.Any(priorityDocumentKeysSet.Contains)),
+            ProcessSingleProjectGroupAsync, onItemsFound, args: default, cancellationToken).ConfigureAwait(false);
         return;
 
-        async Task ProcessProjectGroupsAsync(HashSet<IGrouping<ProjectKey, DocumentKey>> groups)
+        async Task ProcessSingleProjectGroupAsync(
+            IGrouping<ProjectKey, DocumentKey> group,
+            Action<RoslynNavigateToItem> onItemFound,
+            VoidResult _,
+            CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            using var _ = ArrayBuilder<Task>.GetInstance(out var tasks);
+            if (cancellationToken.IsCancellationRequested)
+                return;
 
-            foreach (var group in groups)
-                tasks.Add(ProcessProjectGroupAsync(group));
-
-            await Task.WhenAll(tasks).ConfigureAwait(false);
-        }
-
-        async Task ProcessProjectGroupAsync(IGrouping<ProjectKey, DocumentKey> group)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await Task.Yield().ConfigureAwait(false);
             var project = group.Key;
 
-            // Break the project into high-pri docs and low pri docs.
-            using var _1 = GetPooledHashSet(group.Where(priorityDocumentKeysSet.Contains), out var highPriDocs);
-            using var _2 = GetPooledHashSet(group.Where(d => !highPriDocs.Contains(d)), out var lowPriDocs);
+            // Break the project into high-pri docs and low pri docs, and process in that order.
+            await Parallel.ForEachAsync(
+                Prioritize(group, priorityDocumentKeysSet.Contains),
+                cancellationToken,
+                async (documentKey, cancellationToken) =>
+                {
+                    // First, load the lightweight filter index to check if this document could possibly match.
+                    var filterIndex = await GetFilterIndexAsync(storageService, documentKey, cancellationToken).ConfigureAwait(false);
+                    var nameMatchKinds = filterIndex?.CouldContainNavigateToMatch(patternName, patternContainer) ?? PatternMatcherKind.None;
+                    if (nameMatchKinds == PatternMatcherKind.None)
+                        return;
 
-            await SearchCachedDocumentsInCurrentProcessAsync(
-                storageService, patternName, patternContainer, declaredSymbolInfoKindsSet,
-                onItemFound, highPriDocs, cancellationToken).ConfigureAwait(false);
+                    // The filter passed — now load the full index with all declared symbols.
+                    var index = await GetFullIndexAsync(storageService, documentKey, cancellationToken).ConfigureAwait(false);
+                    if (index == null)
+                        return;
 
-            await SearchCachedDocumentsInCurrentProcessAsync(
-                storageService, patternName, patternContainer, declaredSymbolInfoKindsSet,
-                onItemFound, lowPriDocs, cancellationToken).ConfigureAwait(false);
+                    ProcessIndex(
+                        documentKey, document: null, patternName, patternContainer, declaredSymbolInfoKindsSet,
+                        nameMatchKinds, index, linkedIndices: null, onItemFound, cancellationToken);
+                }).ConfigureAwait(false);
 
             // done with project.  Let the host know.
             await onProjectCompleted().ConfigureAwait(false);
         }
     }
 
-    private static async Task SearchCachedDocumentsInCurrentProcessAsync(
-        IChecksummedPersistentStorageService storageService,
-        string patternName,
-        string? patternContainer,
-        DeclaredSymbolInfoKindSet kinds,
-        Func<RoslynNavigateToItem, Task> onItemFound,
-        HashSet<DocumentKey> documentKeys,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        using var _ = ArrayBuilder<Task>.GetInstance(out var tasks);
-
-        foreach (var documentKey in documentKeys)
-        {
-            tasks.Add(Task.Run(async () =>
-            {
-                var index = await GetIndexAsync(storageService, documentKey, cancellationToken).ConfigureAwait(false);
-                if (index == null)
-                    return;
-
-                await ProcessIndexAsync(
-                    documentKey, document: null, patternName, patternContainer, kinds, onItemFound, index, cancellationToken).ConfigureAwait(false);
-            }, cancellationToken));
-        }
-
-        await Task.WhenAll(tasks).ConfigureAwait(false);
-    }
-
-    private static Task<TopLevelSyntaxTreeIndex?> GetIndexAsync(
+    private static async Task<NavigateToSearchIndex?> GetFilterIndexAsync(
         IChecksummedPersistentStorageService storageService,
         DocumentKey documentKey,
         CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        if (cancellationToken.IsCancellationRequested)
+            return null;
+
+        if (!ShouldSearchCachedDocuments(out _, out var cachedFilterIndexMap, out var stringTable))
+            return null;
+
+        var asyncLazy = cachedFilterIndexMap.GetOrAdd(
+            (storageService, documentKey, stringTable),
+            static t => AsyncLazy.Create(static (t, c) =>
+                NavigateToSearchIndex.LoadAsync(t.service, t.documentKey, checksum: null, t.stringTable, c),
+                arg: t));
+        return await asyncLazy.GetValueAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static Task<TopLevelSyntaxTreeIndex?> GetFullIndexAsync(
+        IChecksummedPersistentStorageService storageService,
+        DocumentKey documentKey,
+        CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+            return SpecializedTasks.Null<TopLevelSyntaxTreeIndex>();
+
         // Retrieve the string table we use to dedupe strings.  If we can't get it, that means the solution has 
         // fully loaded and we've switched over to normal navto lookup.
-        if (!ShouldSearchCachedDocuments(out var cachedIndexMap, out var stringTable))
+        if (!ShouldSearchCachedDocuments(out var cachedIndexMap, out _, out var stringTable))
             return SpecializedTasks.Null<TopLevelSyntaxTreeIndex>();
 
         // Add the async lazy to compute the index for this document.  Or, return the existing cached one if already
@@ -211,8 +214,9 @@ internal abstract partial class AbstractNavigateToSearchService
         // match on disk anymore.
         var asyncLazy = cachedIndexMap.GetOrAdd(
             (storageService, documentKey, stringTable),
-            static t => AsyncLazy.Create(
-                c => TopLevelSyntaxTreeIndex.LoadAsync(t.service, t.documentKey, checksum: null, t.stringTable, c)));
+            static t => AsyncLazy.Create(static (t, c) =>
+                TopLevelSyntaxTreeIndex.LoadAsync(t.service, t.documentKey, checksum: null, t.stringTable, c),
+                arg: t));
         return asyncLazy.GetValueAsync(cancellationToken);
     }
 }

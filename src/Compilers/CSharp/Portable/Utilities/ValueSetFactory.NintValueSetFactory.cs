@@ -10,44 +10,44 @@ namespace Microsoft.CodeAnalysis.CSharp
 
     internal static partial class ValueSetFactory
     {
-        private sealed class NintValueSetFactory : IValueSetFactory<int>, IValueSetFactory
+        private sealed class NintValueSetFactory : IConstantValueSetFactory<int>, IConstantValueSetFactory
         {
             public static readonly NintValueSetFactory Instance = new NintValueSetFactory();
 
             private NintValueSetFactory() { }
 
-            IValueSet IValueSetFactory.AllValues => NintValueSet.AllValues;
+            IConstantValueSet IConstantValueSetFactory.AllValues => NintValueSet.AllValues;
 
-            IValueSet IValueSetFactory.NoValues => NintValueSet.NoValues;
+            IConstantValueSet IConstantValueSetFactory.NoValues => NintValueSet.NoValues;
 
-            public IValueSet<int> Related(BinaryOperatorKind relation, int value)
+            public IConstantValueSet<int> Related(BinaryOperatorKind relation, int value)
             {
                 return new NintValueSet(
                     hasSmall: relation switch { LessThan => true, LessThanOrEqual => true, _ => false },
-                    values: NumericValueSetFactory<int, IntTC>.Instance.Related(relation, value),
+                    values: new NumericValueSetFactory<int>(IntTC.DefaultInstance).Related(relation, value),
                     hasLarge: relation switch { GreaterThan => true, GreaterThanOrEqual => true, _ => false }
                     );
             }
 
-            IValueSet IValueSetFactory.Random(int expectedSize, Random random)
+            IConstantValueSet IConstantValueSetFactory.Random(int expectedSize, Random random)
             {
                 return new NintValueSet(
                     hasSmall: random.NextDouble() < 0.25,
-                    values: (IValueSet<int>)NumericValueSetFactory<int, IntTC>.Instance.Random(expectedSize, random),
+                    values: (IConstantValueSet<int>)new NumericValueSetFactory<int>(IntTC.DefaultInstance).Random(expectedSize, random),
                     hasLarge: random.NextDouble() < 0.25
                     );
             }
 
-            ConstantValue IValueSetFactory.RandomValue(Random random) => ConstantValue.CreateNativeInt(default(IntTC).Random(random));
+            ConstantValue IConstantValueSetFactory.RandomValue(Random random) => ConstantValue.CreateNativeInt(IntTC.DefaultInstance.Random(random));
 
-            IValueSet IValueSetFactory.Related(BinaryOperatorKind relation, ConstantValue value)
+            IConstantValueSet IConstantValueSetFactory.Related(BinaryOperatorKind relation, ConstantValue value)
             {
-                return value.IsBad ? NintValueSet.AllValues : Related(relation, default(IntTC).FromConstantValue(value));
+                return value.IsBad ? NintValueSet.AllValues : Related(relation, IntTC.DefaultInstance.FromConstantValue(value));
             }
 
-            bool IValueSetFactory.Related(BinaryOperatorKind relation, ConstantValue left, ConstantValue right)
+            bool IConstantValueSetFactory.Related(BinaryOperatorKind relation, ConstantValue left, ConstantValue right)
             {
-                var tc = default(IntTC);
+                var tc = IntTC.DefaultInstance;
                 return tc.Related(relation, tc.FromConstantValue(left), tc.FromConstantValue(right));
             }
         }

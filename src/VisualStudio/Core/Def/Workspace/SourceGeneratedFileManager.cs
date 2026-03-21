@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel.Composition;
 using System.IO;
@@ -10,12 +11,16 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Editor.Shared.Extensions;
 using Microsoft.CodeAnalysis.Editor.Shared.Utilities;
+using Microsoft.CodeAnalysis.ErrorReporting;
 using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.Host.Mef;
 using Microsoft.CodeAnalysis.Shared.TestHooks;
+using Microsoft.CodeAnalysis.Shared.Utilities;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.CodeAnalysis.Text.Shared.Extensions;
+using Microsoft.CodeAnalysis.Threading;
 using Microsoft.VisualStudio.Editor;
 using Microsoft.VisualStudio.Imaging;
 using Microsoft.VisualStudio.Imaging.Interop;
@@ -30,18 +35,23 @@ using Task = System.Threading.Tasks.Task;
 
 namespace Microsoft.VisualStudio.LanguageServices.Implementation;
 
+using InfoBarInfo = (ImageMoniker imageMoniker, string message);
+
 /// <summary>
 /// Provides the support for opening files pointing to source generated documents, and keeping the content updated accordingly.
 /// </summary>
 [Export(typeof(SourceGeneratedFileManager))]
 internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
 {
-    private readonly IServiceProvider _serviceProvider;
+    private readonly SVsServiceProvider _serviceProvider;
+    private readonly IVsService<SVsInfoBarUIFactory, IVsInfoBarUIFactory> _vsInfoBarUIFactory;
+    private readonly IVsService<SVsShell, IVsShell> _vsShell;
     private readonly IThreadingContext _threadingContext;
-    private readonly ForegroundThreadAffinitizedObject _foregroundThreadAffinitizedObject;
-    private readonly IAsynchronousOperationListener _listener;
     private readonly ITextDocumentFactoryService _textDocumentFactoryService;
     private readonly VisualStudioDocumentNavigationService _visualStudioDocumentNavigationService;
+
+    private readonly IAsynchronousOperationListener _listener;
+    private readonly IAsynchronousOperationListenerProvider _listenerProvider;
 
     /// <summary>
     /// The temporary directory that we'll create file names under to act as a prefix we can later recognize and use.
@@ -55,19 +65,24 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
     private readonly VisualStudioWorkspace _visualStudioWorkspace;
 
     /// <summary>
-    /// When we have to put a placeholder file on disk, we put it in a directory named by the GUID portion of the DocumentId.
-    /// We store the actual DocumentId (which includes the ProjectId) and some other textual information in
-    /// <see cref="_directoryInfoOnDiskByContainingDirectoryId"/>, so that way we don't have to pack the information into the path itself.
-    /// If we put the GUIDs and string names directly as components of the path, we quickly run into MAX_PATH. If we had a way to do virtual
-    /// monikers that don't run into MAX_PATH issues then we absolutely would want to get rid of this.
+    /// When we have to put a placeholder file on disk, we put it in a directory named by the GUID portion of the
+    /// DocumentId. We store the actual DocumentId (which includes the ProjectId) and some other textual information in
+    /// <see cref="_directoryInfoOnDiskByContainingDirectoryId"/>, so that way we don't have to pack the information
+    /// into the path itself. If we put the GUIDs and string names directly as components of the path, we quickly run
+    /// into MAX_PATH. If we had a way to do virtual monikers that don't run into MAX_PATH issues then we absolutely
+    /// would want to get rid of this.
     /// </summary>
-    /// <remarks>All accesses should be on the UI thread.</remarks>
-    private readonly Dictionary<Guid, SourceGeneratedDocumentIdentity> _directoryInfoOnDiskByContainingDirectoryId = [];
+    /// <remarks>
+    /// This can be accessed on any thread.
+    /// </remarks>
+    private readonly ConcurrentDictionary<Guid, SourceGeneratedDocumentIdentity> _directoryInfoOnDiskByContainingDirectoryId = [];
 
     [ImportingConstructor]
     [Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
     public SourceGeneratedFileManager(
-        [Import(typeof(SVsServiceProvider))] IServiceProvider serviceProvider,
+        SVsServiceProvider serviceProvider,
+        IVsService<SVsInfoBarUIFactory, IVsInfoBarUIFactory> vsInfoBarUIFactory,
+        IVsService<SVsShell, IVsShell> vsShell,
         IThreadingContext threadingContext,
         OpenTextBufferProvider openTextBufferProvider,
         IVsEditorAdaptersFactoryService editorAdaptersFactoryService,
@@ -77,31 +92,42 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
         IAsynchronousOperationListenerProvider listenerProvider)
     {
         _serviceProvider = serviceProvider;
+        _vsInfoBarUIFactory = vsInfoBarUIFactory;
+        _vsShell = vsShell;
         _threadingContext = threadingContext;
-        _foregroundThreadAffinitizedObject = new ForegroundThreadAffinitizedObject(threadingContext, assertIsForeground: false);
         _textDocumentFactoryService = textDocumentFactoryService;
         _temporaryDirectory = PathUtilities.EnsureTrailingSeparator(Path.Combine(Path.GetTempPath(), "VSGeneratedDocuments"));
         _visualStudioWorkspace = visualStudioWorkspace;
         _visualStudioDocumentNavigationService = visualStudioDocumentNavigationService;
 
-        Directory.CreateDirectory(_temporaryDirectory);
-
+        _listenerProvider = listenerProvider;
         _listener = listenerProvider.GetListener(FeatureAttribute.SourceGenerators);
+
+        Directory.CreateDirectory(_temporaryDirectory);
 
         openTextBufferProvider.AddListener(this);
     }
 
-    public Func<CancellationToken, Task<bool>> GetNavigationCallback(SourceGeneratedDocument document, TextSpan sourceSpan)
+    /// <summary>
+    /// Takes a <see cref="SourceGeneratedDocument"/> and maps it to a file path that can be opened in Visual Studio.
+    /// This works simply by creating an empty temporary file in a well known location that we will then listen to see
+    /// if visual studio opens it.  If so, we we can map that location on disk back to right <see
+    /// cref="SourceGeneratedDocumentIdentity"/> information for this document, find the contents in the workspace and
+    /// update the text buffer with those contents.
+    /// </summary>
+    /// <remarks>
+    /// This is all currently necessary because much of VS requires an actual file on disk to open a document, along
+    /// with special handling for file:// uris.  For example, navigating to a source generated document, or showing its
+    /// contents in the Navigate-To preview window.  Ideally we could just inform them of special handling of some
+    /// roslyn-specific uri schema (a-la VSCode), but that isn't currently possible.
+    /// </remarks>
+    public string MapSourceGeneratedDocumentToOpenableFilePath(SourceGeneratedDocument document)
     {
         // We will create an file name to represent this generated file; the Visual Studio shell APIs imply you can use a URI,
         // but most URIs are blocked other than file:// and http://; they also get extra handling to attempt to download the file so
         // those aren't really usable anyways.
         // The file name we create is <temp path>\<document id in GUID form>\<hint name>
-
-        if (!_directoryInfoOnDiskByContainingDirectoryId.ContainsKey(document.Id.Id))
-        {
-            _directoryInfoOnDiskByContainingDirectoryId.Add(document.Id.Id, document.Identity);
-        }
+        _directoryInfoOnDiskByContainingDirectoryId.TryAdd(document.Id.Id, document.Identity);
 
         // We must always ensure the file name portion of the path is just the hint name, which matches the compiler's choice so
         // debugging works properly.
@@ -111,13 +137,21 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
             // Normalize hint name (it always contains forward slashes).
             document.HintName.Replace('/', Path.DirectorySeparatorChar));
 
-        Directory.CreateDirectory(Path.GetDirectoryName(temporaryFilePath));
-
-        // Don't write to the file if it's already there, as that potentially triggers a file reload
-        if (!File.Exists(temporaryFilePath))
+        IOUtilities.PerformIO(() =>
         {
-            File.WriteAllText(temporaryFilePath, "");
-        }
+            Directory.CreateDirectory(Path.GetDirectoryName(temporaryFilePath));
+
+            // Don't write to the file if it's already there, as that potentially triggers a file reload
+            if (!File.Exists(temporaryFilePath))
+                File.WriteAllText(temporaryFilePath, "");
+        });
+
+        return temporaryFilePath;
+    }
+
+    public Func<CancellationToken, Task<bool>> GetNavigationCallback(SourceGeneratedDocument document, TextSpan sourceSpan)
+    {
+        var temporaryFilePath = MapSourceGeneratedDocumentToOpenableFilePath(document);
 
         return async cancellationToken =>
         {
@@ -146,7 +180,7 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
         string filePath,
         out SourceGeneratedDocumentIdentity identity)
     {
-        _foregroundThreadAffinitizedObject.AssertIsForeground();
+        _threadingContext.ThrowIfNotOnUIThread();
 
         identity = default;
 
@@ -176,14 +210,14 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
 
     void IOpenTextBufferEventListener.OnOpenDocument(string moniker, ITextBuffer textBuffer, IVsHierarchy? hierarchy)
     {
-        _foregroundThreadAffinitizedObject.AssertIsForeground();
+        _threadingContext.ThrowIfNotOnUIThread();
 
         if (TryGetGeneratedFileInformation(moniker, out var documentIdentity))
         {
             // Attach to the text buffer if we haven't already
             if (!_openFiles.TryGetValue(moniker, out var openFile))
             {
-                openFile = new OpenSourceGeneratedFile(this, textBuffer, _visualStudioWorkspace, documentIdentity, _threadingContext);
+                openFile = new OpenSourceGeneratedFile(this, textBuffer, documentIdentity);
                 _openFiles.Add(moniker, openFile);
 
                 _threadingContext.JoinableTaskFactory.Run(() => openFile.RefreshFileAsync(CancellationToken.None).AsTask());
@@ -199,14 +233,12 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
     void IOpenTextBufferEventListener.OnDocumentOpenedIntoWindowFrame(string moniker, IVsWindowFrame windowFrame)
     {
         if (_openFiles.TryGetValue(moniker, out var openFile))
-        {
-            openFile.SetWindowFrame(windowFrame);
-        }
+            _threadingContext.JoinableTaskFactory.Run(() => openFile.SetWindowFrameAsync(windowFrame));
     }
 
     void IOpenTextBufferEventListener.OnCloseDocument(string moniker)
     {
-        _foregroundThreadAffinitizedObject.AssertIsForeground();
+        _threadingContext.ThrowIfNotOnUIThread();
 
         if (_openFiles.TryGetValue(moniker, out var openFile))
         {
@@ -215,21 +247,15 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
         }
     }
 
-    void IOpenTextBufferEventListener.OnRefreshDocumentContext(string moniker, IVsHierarchy hierarchy)
-    {
-    }
+    void IOpenTextBufferEventListener.OnRefreshDocumentContext(string moniker, IVsHierarchy hierarchy) { }
+    void IOpenTextBufferEventListener.OnRenameDocument(string newMoniker, string oldMoniker, ITextBuffer textBuffer) { }
+    void IOpenTextBufferEventListener.OnSaveDocument(string moniker) { }
 
-    void IOpenTextBufferEventListener.OnRenameDocument(string newMoniker, string oldMoniker, ITextBuffer textBuffer)
-    {
-    }
-
-    private class OpenSourceGeneratedFile : ForegroundThreadAffinitizedObject, IDisposable
+    private sealed class OpenSourceGeneratedFile : IDisposable
     {
         private readonly SourceGeneratedFileManager _fileManager;
         private readonly ITextBuffer _textBuffer;
-        private readonly Workspace _workspace;
         private readonly SourceGeneratedDocumentIdentity _documentIdentity;
-        private readonly IWorkspaceConfigurationService? _workspaceConfigurationService;
 
         /// <summary>
         /// A read-only region that we create across the entire file to prevent edits unless we are the one making them.
@@ -250,25 +276,21 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
         private readonly AsyncBatchingWorkQueue _batchingWorkQueue;
 
         /// <summary>
-        /// The <see cref="IVsWindowFrame"/> of the active window. This may be null if we're in the middle of construction and
-        /// we haven't been given it yet.
+        /// The info bar of the active window. This may be null if we're in the middle of construction and we haven't
+        /// created it yet
         /// </summary>
-        private IVsWindowFrame? _windowFrame;
+        private VisualStudioInfoBar? _infoBar;
+        private VisualStudioInfoBar.InfoBarMessage? _currentInfoBarMessage;
 
-        private string? _windowFrameMessageToShow = null;
-        private ImageMoniker _windowFrameImageMonikerToShow = default;
-        private string? _currentWindowFrameMessage = null;
-        private ImageMoniker _currentWindowFrameImageMoniker = default;
-        private IVsInfoBarUIElement? _currentWindowFrameInfoBarElement = null;
+        private InfoBarInfo? _infoToShow = null;
+        private WorkspaceEventRegistration? _workspaceChangedDisposer;
 
-        public OpenSourceGeneratedFile(SourceGeneratedFileManager fileManager, ITextBuffer textBuffer, Workspace workspace, SourceGeneratedDocumentIdentity documentIdentity, IThreadingContext threadingContext)
-            : base(threadingContext, assertIsForeground: true)
+        public OpenSourceGeneratedFile(SourceGeneratedFileManager fileManager, ITextBuffer textBuffer, SourceGeneratedDocumentIdentity documentIdentity)
         {
+            fileManager._threadingContext.ThrowIfNotOnUIThread();
             _fileManager = fileManager;
             _textBuffer = textBuffer;
-            _workspace = workspace;
             _documentIdentity = documentIdentity;
-            _workspaceConfigurationService = _workspace.Services.GetService<IWorkspaceConfigurationService>();
 
             // We'll create a read-only region for the file, but it'll be a dynamic region we can temporarily suspend
             // while we're doing edits.
@@ -283,7 +305,7 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
                 readOnlyRegionEdit.Apply();
             }
 
-            _workspace.WorkspaceChanged += OnWorkspaceChanged;
+            _workspaceChangedDisposer = this.Workspace.RegisterWorkspaceChangedHandler(OnWorkspaceChanged);
 
             _batchingWorkQueue = new AsyncBatchingWorkQueue(
                 TimeSpan.FromSeconds(1),
@@ -292,23 +314,26 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
                 _cancellationTokenSource.Token);
         }
 
+        private Workspace Workspace => _fileManager._visualStudioWorkspace;
+
         private void DisconnectFromWorkspaceIfOpen()
         {
-            AssertIsForeground();
+            _fileManager._threadingContext.ThrowIfNotOnUIThread();
 
-            if (_workspace.IsDocumentOpen(_documentIdentity.DocumentId))
+            if (this.Workspace.IsDocumentOpen(_documentIdentity.DocumentId))
             {
                 var sourceGeneratedDocument = (SourceGeneratedDocument?)_textBuffer.CurrentSnapshot.GetOpenDocumentInCurrentContextWithChanges();
                 Contract.ThrowIfNull(sourceGeneratedDocument);
-                _workspace.OnSourceGeneratedDocumentClosed(sourceGeneratedDocument);
+                this.Workspace.OnSourceGeneratedDocumentClosed(sourceGeneratedDocument);
             }
         }
 
         public void Dispose()
         {
-            AssertIsForeground();
+            _fileManager._threadingContext.ThrowIfNotOnUIThread();
 
-            _workspace.WorkspaceChanged -= OnWorkspaceChanged;
+            _workspaceChangedDisposer?.Dispose();
+            _workspaceChangedDisposer = null;
 
             // Disconnect the buffer from the workspace before making it eligible for edits
             DisconnectFromWorkspaceIfOpen();
@@ -329,25 +354,25 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
         {
             SourceGeneratedDocument? generatedDocument = null;
             SourceText? generatedSource = null;
-            var project = _workspace.CurrentSolution.GetProject(_documentIdentity.DocumentId.ProjectId);
+            var project = this.Workspace.CurrentSolution.GetProject(_documentIdentity.DocumentId.ProjectId);
 
             // Locals correspond to the equivalently-named fields; we'll assign these and then assign to the fields while on the
             // UI thread to avoid any potential race where we update the InfoBar while this is running.
-            string? windowFrameMessageToShow;
-            ImageMoniker windowFrameImageMonikerToShow;
+            InfoBarInfo infoToShow;
 
             if (project == null)
             {
-                windowFrameMessageToShow = "The project no longer exists.";
-                windowFrameImageMonikerToShow = KnownMonikers.StatusError;
+                infoToShow = (KnownMonikers.StatusError, ServicesVSResources.The_project_no_longer_exists);
             }
             else
             {
                 generatedDocument = await project.GetSourceGeneratedDocumentAsync(_documentIdentity.DocumentId, cancellationToken).ConfigureAwait(false);
                 if (generatedDocument != null)
                 {
-                    windowFrameMessageToShow = string.Format(ServicesVSResources.This_file_is_autogenerated_by_0_and_cannot_be_edited, GeneratorDisplayName);
-                    windowFrameImageMonikerToShow = default;
+                    infoToShow = (imageMoniker: default, string.Format(
+                        ServicesVSResources.This_file_was_generated_by_0_at_1_and_cannot_be_edited,
+                        GeneratorDisplayName,
+                        generatedDocument.GenerationDateTime.ToLocalTime()));
                     generatedSource = await generatedDocument.GetValueTextAsync(cancellationToken).ConfigureAwait(false);
                 }
                 else
@@ -355,21 +380,18 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
                     // The file isn't there anymore; do we still have the generator at all?
                     if (project.AnalyzerReferences.Any(a => a.FullPath == _documentIdentity.Generator.AssemblyPath))
                     {
-                        windowFrameMessageToShow = string.Format(ServicesVSResources.The_generator_0_that_generated_this_file_has_stopped_generating_this_file, GeneratorDisplayName);
-                        windowFrameImageMonikerToShow = KnownMonikers.StatusError;
+                        infoToShow = (KnownMonikers.StatusError, string.Format(ServicesVSResources.The_generator_0_that_generated_this_file_has_stopped_generating_this_file, GeneratorDisplayName));
                     }
                     else
                     {
-                        windowFrameMessageToShow = string.Format(ServicesVSResources.The_generator_0_that_generated_this_file_has_been_removed_from_the_project, GeneratorDisplayName);
-                        windowFrameImageMonikerToShow = KnownMonikers.StatusError;
+                        infoToShow = (KnownMonikers.StatusError, string.Format(ServicesVSResources.The_generator_0_that_generated_this_file_has_been_removed_from_the_project, GeneratorDisplayName));
                     }
                 }
             }
 
-            await ThreadingContext.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
+            await _fileManager._threadingContext.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-            _windowFrameMessageToShow = windowFrameMessageToShow;
-            _windowFrameImageMonikerToShow = windowFrameImageMonikerToShow;
+            _infoToShow = infoToShow;
 
             // Update the text if we have new text
             if (generatedSource != null)
@@ -402,12 +424,8 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
 
                     // If the file isn't already open, open it now. We may transition between opening and closing
                     // if the file is repeatedly appearing and disappearing.
-                    var connectToWorkspace = _workspaceConfigurationService?.Options.EnableOpeningSourceGeneratedFiles != false;
-
-                    if (connectToWorkspace && !_workspace.IsDocumentOpen(_documentIdentity.DocumentId))
-                    {
-                        _workspace.OnSourceGeneratedDocumentOpened(_textBuffer.AsTextContainer(), generatedDocument);
-                    }
+                    if (!this.Workspace.IsDocumentOpen(_documentIdentity.DocumentId))
+                        this.Workspace.OnSourceGeneratedDocumentOpened(_textBuffer.AsTextContainer(), generatedDocument);
                 }
                 finally
                 {
@@ -423,87 +441,110 @@ internal sealed class SourceGeneratedFileManager : IOpenTextBufferEventListener
             }
 
             // Update the InfoBar either way
-            EnsureWindowFrameInfoBarUpdated();
+            await EnsureWindowFrameInfoBarUpdatedAsync(cancellationToken).ConfigureAwait(true);
         }
 
-        private void OnWorkspaceChanged(object sender, WorkspaceChangeEventArgs e)
+        private void OnWorkspaceChanged(WorkspaceChangeEventArgs e)
         {
-            var oldProject = e.OldSolution.GetProject(_documentIdentity.DocumentId.ProjectId);
-            var newProject = e.NewSolution.GetProject(_documentIdentity.DocumentId.ProjectId);
+            var projectId = _documentIdentity.DocumentId.ProjectId;
+
+            // Trivial check.  see if the SG version of these projects changed.  If so, we definitely want to update
+            // this generated file.
+            if (e.OldSolution.GetSourceGeneratorExecutionVersion(projectId) !=
+                e.NewSolution.GetSourceGeneratorExecutionVersion(projectId))
+            {
+                _batchingWorkQueue.AddWork();
+                return;
+            }
+
+            var oldProject = e.OldSolution.GetProject(projectId);
+            var newProject = e.NewSolution.GetProject(projectId);
 
             if (oldProject != null && newProject != null)
             {
                 // We'll start this work asynchronously to figure out if we need to change; if the file is closed the cancellationToken
                 // is triggered and this will no-op.
-                var asyncToken = _fileManager._listener.BeginAsyncOperation(nameof(OpenSourceGeneratedFile) + "." + nameof(OnWorkspaceChanged));
+                var asyncToken = _fileManager._listener.BeginAsyncOperation($"{nameof(OpenSourceGeneratedFile)}.{nameof(OnWorkspaceChanged)}");
+                CheckDependentVersionsAsync().CompletesAsyncOperation(asyncToken);
+            }
 
-                Task.Run(async () =>
+            async Task CheckDependentVersionsAsync()
+            {
+                // Ensure we do this off the thread that is telling us about workspace changes.
+                await Task.Yield();
+
+                if (await oldProject.GetDependentVersionAsync(_cancellationTokenSource.Token).ConfigureAwait(false) !=
+                    await newProject.GetDependentVersionAsync(_cancellationTokenSource.Token).ConfigureAwait(false))
                 {
-                    if (await oldProject.GetDependentVersionAsync(_cancellationTokenSource.Token).ConfigureAwait(false) !=
-                        await newProject.GetDependentVersionAsync(_cancellationTokenSource.Token).ConfigureAwait(false))
-                    {
-                        _batchingWorkQueue.AddWork();
-                    }
-                }, _cancellationTokenSource.Token).CompletesAsyncOperation(asyncToken);
+                    _batchingWorkQueue.AddWork();
+                }
             }
         }
 
-        internal void SetWindowFrame(IVsWindowFrame windowFrame)
+        internal async Task SetWindowFrameAsync(IVsWindowFrame windowFrame)
         {
-            AssertIsForeground();
+            var cancellationToken = _cancellationTokenSource.Token;
+            await _fileManager._threadingContext.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-            if (_windowFrame != null)
-            {
-                // We already have a window frame, and we don't expect to get a second one
+            // Only need to do this once.  Can use the presence of the info bar to check this.
+            if (_infoBar != null)
                 return;
-            }
 
-            _windowFrame = windowFrame;
+            _infoBar = new VisualStudioInfoBar(
+                _fileManager._threadingContext, _fileManager._vsInfoBarUIFactory, _fileManager._vsShell, _fileManager._listenerProvider, windowFrame);
 
             // We'll override the window frame and never show it as dirty, even if there's an underlying edit
             windowFrame.SetProperty((int)__VSFPROPID2.VSFPROPID_OverrideDirtyState, false);
             windowFrame.SetProperty((int)__VSFPROPID5.VSFPROPID_OverrideCaption, _documentIdentity.HintName + " " + ServicesVSResources.generated_suffix);
             windowFrame.SetProperty((int)__VSFPROPID5.VSFPROPID_OverrideToolTip, _documentIdentity.HintName + " " + string.Format(ServicesVSResources.generated_by_0_suffix, GeneratorDisplayName));
 
-            EnsureWindowFrameInfoBarUpdated();
+            await EnsureWindowFrameInfoBarUpdatedAsync(cancellationToken).ConfigureAwait(true);
         }
 
-        private void EnsureWindowFrameInfoBarUpdated()
+        private async Task EnsureWindowFrameInfoBarUpdatedAsync(CancellationToken cancellationToken)
         {
-            AssertIsForeground();
+            await _fileManager._threadingContext.JoinableTaskFactory.SwitchToMainThreadAsync(cancellationToken);
 
-            if (_windowFrameMessageToShow == null ||
-                _windowFrame == null ||
-                _currentWindowFrameMessage == _windowFrameMessageToShow &&
-                !_currentWindowFrameImageMoniker.Equals(_windowFrameImageMonikerToShow))
-            {
-                // We don't have anything to do, or anything to do yet.
+            // If we don't have a frame, or even a message, we can't do anything yet.
+            if (_infoToShow is null || _infoBar is null)
                 return;
-            }
 
-            var infoBarFactory = (IVsInfoBarUIFactory)_fileManager._serviceProvider.GetService(typeof(SVsInfoBarUIFactory));
-            Assumes.Present(infoBarFactory);
-
-            if (ErrorHandler.Failed(_windowFrame.GetProperty((int)__VSFPROPID7.VSFPROPID_InfoBarHost, out var infoBarHostObject)) ||
-                infoBarHostObject is not IVsInfoBarHost infoBarHost)
+            // bail out if no change is needed
+            var (imageMoniker, message) = _infoToShow.Value;
+            if (_currentInfoBarMessage != null &&
+                _currentInfoBarMessage.Message == message &&
+                _currentInfoBarMessage.ImageMoniker.Equals(imageMoniker))
             {
                 return;
             }
 
-            // Remove the existing bar
-            if (_currentWindowFrameInfoBarElement != null)
+            // Remove the current message so it can be replaced with the new one.
+            _currentInfoBarMessage?.Remove();
+
+            // Capture the newly created message into a local.  That way the "rerun generator" button callback can
+            // reference *exactly this* instance in order to remove it when it is clicked.
+            VisualStudioInfoBar.InfoBarMessage? infoBarMessage = null;
+            InfoBarUI[] infoBarItems = [new InfoBarUI(ServicesVSResources.Rerun_generator, InfoBarUI.UIKind.Button, () =>
             {
-                infoBarHost.RemoveInfoBar(_currentWindowFrameInfoBarElement);
-            }
+                _fileManager._threadingContext.ThrowIfNotOnUIThread();
+                Contract.ThrowIfNull(infoBarMessage);
+                infoBarMessage.Remove();
 
-            var infoBar = new InfoBarModel(_windowFrameMessageToShow, _windowFrameImageMonikerToShow, isCloseButtonVisible: false);
-            var infoBarUI = infoBarFactory.CreateInfoBar(infoBar);
+                _currentInfoBarMessage = _fileManager._threadingContext.JoinableTaskFactory.Run(() =>
+                    _infoBar.ShowInfoBarMessageAsync(
+                        ServicesVSResources.Generator_running, isCloseButtonVisible: false, KnownMonikers.StatusInformation));
 
-            infoBarHost.AddInfoBar(infoBarUI);
+                // Force regeneration here.  Nothing has actually changed, so the incremental generator architecture
+                // would normally just return the same values all over again.  By forcing things, we drop the
+                // generator driver, which will force new files to actually be created.
+                this.Workspace.EnqueueUpdateSourceGeneratorVersion(
+                    this._documentIdentity.DocumentId.ProjectId,
+                    forceRegeneration: true);
+            })];
 
-            _currentWindowFrameMessage = _windowFrameMessageToShow;
-            _currentWindowFrameImageMoniker = _windowFrameImageMonikerToShow;
-            _currentWindowFrameInfoBarElement = infoBarUI;
+            infoBarMessage = await _infoBar.ShowInfoBarMessageAsync(
+                message, isCloseButtonVisible: false, imageMoniker, infoBarItems).ConfigureAwait(true);
+            _currentInfoBarMessage = infoBarMessage;
         }
 
         public Task<bool> NavigateToSpanAsync(TextSpan sourceSpan, CancellationToken cancellationToken)

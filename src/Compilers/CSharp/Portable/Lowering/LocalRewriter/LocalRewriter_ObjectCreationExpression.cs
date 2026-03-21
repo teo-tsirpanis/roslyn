@@ -32,6 +32,8 @@ namespace Microsoft.CodeAnalysis.CSharp
         {
             Debug.Assert(node != null);
 
+            var constructor = node.Constructor;
+
             // Rewrite the arguments.
             // NOTE: We may need additional argument rewriting such as
             //       re-ordering arguments based on argsToParamsOpt map, etc.
@@ -42,9 +44,9 @@ namespace Microsoft.CodeAnalysis.CSharp
             ArrayBuilder<LocalSymbol>? tempsBuilder = null;
             ImmutableArray<BoundExpression> rewrittenArguments = VisitArgumentsAndCaptureReceiverIfNeeded(
                 ref receiverDiscard,
-                captureReceiverMode: ReceiverCaptureMode.Default,
+                forceReceiverCapturing: false,
                 node.Arguments,
-                node.Constructor,
+                constructor,
                 node.ArgsToParamsOpt,
                 argumentRefKindsOpt,
                 storesOpt: null,
@@ -56,7 +58,7 @@ namespace Microsoft.CodeAnalysis.CSharp
             // such as re-ordering arguments based on argsToParamsOpt map, etc.
             rewrittenArguments = MakeArguments(
                 rewrittenArguments,
-                node.Constructor,
+                constructor,
                 node.Expanded,
                 node.ArgsToParamsOpt,
                 ref argumentRefKindsOpt,
@@ -72,7 +74,7 @@ namespace Microsoft.CodeAnalysis.CSharp
                     throw ExceptionUtilities.UnexpectedValue(temps.Length);
                 }
 
-                rewrittenObjectCreation = node.UpdateArgumentsAndInitializer(rewrittenArguments, argumentRefKindsOpt, MakeObjectCreationInitializerForExpressionTree(node.InitializerExpressionOpt), changeTypeOpt: node.Constructor.ContainingType);
+                rewrittenObjectCreation = node.Update(constructor, rewrittenArguments, argumentRefKindsOpt, MakeObjectCreationInitializerForExpressionTree(node.InitializerExpressionOpt), changeTypeOpt: constructor.ContainingType);
 
                 if (node.Type.IsInterfaceType())
                 {
@@ -83,10 +85,16 @@ namespace Microsoft.CodeAnalysis.CSharp
                 return rewrittenObjectCreation;
             }
 
-            rewrittenObjectCreation = node.UpdateArgumentsAndInitializer(rewrittenArguments, argumentRefKindsOpt, newInitializerExpression: null, changeTypeOpt: node.Constructor.ContainingType);
+            if (Instrument)
+            {
+                BoundExpression? receiver = null;
+                Instrumenter.InterceptCallAndAdjustArguments(ref constructor, ref receiver, ref rewrittenArguments, ref argumentRefKindsOpt);
+            }
+
+            rewrittenObjectCreation = node.Update(constructor, rewrittenArguments, argumentRefKindsOpt, newInitializerExpression: null, changeTypeOpt: constructor.ContainingType);
 
             // replace "new S()" with a default struct ctor with "default(S)"
-            if (node.Constructor.IsDefaultValueTypeConstructor())
+            if (constructor.IsDefaultValueTypeConstructor())
             {
                 rewrittenObjectCreation = new BoundDefaultExpression(rewrittenObjectCreation.Syntax, rewrittenObjectCreation.Type!);
             }
@@ -175,11 +183,16 @@ namespace Microsoft.CodeAnalysis.CSharp
                 Debug.Assert(withExpr.CloneMethod is not null);
                 Debug.Assert(withExpr.CloneMethod.ParameterCount == 0);
 
+                BoundCall clone = _factory.Call(
+                        rewrittenReceiver,
+                        withExpr.CloneMethod);
+
+                Conversion c = _factory.ClassifyEmitConversion(clone, type);
+                Debug.Assert(c.IsReference || c.IsIdentity);
                 expression = _factory.Convert(
                     type,
-                    _factory.Call(
-                        rewrittenReceiver,
-                        withExpr.CloneMethod));
+                    clone,
+                    c);
             }
 
             return MakeExpressionWithInitializer(
@@ -322,7 +335,7 @@ namespace Microsoft.CodeAnalysis.CSharp
             // if struct defines one.
             // Since we cannot know if T has a parameterless constructor statically, 
             // we must call Activator.CreateInstance unconditionally.
-            MethodSymbol method;
+            MethodSymbol? method;
 
             if (!this.TryGetWellKnownTypeMember(syntax, WellKnownMember.System_Activator__CreateInstance_T, out method))
             {
@@ -331,6 +344,8 @@ namespace Microsoft.CodeAnalysis.CSharp
 
             Debug.Assert((object)method != null);
             method = method.Construct(ImmutableArray.Create<TypeSymbol>(typeParameter));
+
+            method.CheckConstraints(new ConstraintsHelper.CheckConstraintsArgs(_compilation, _compilation.Conversions, syntax.GetLocation(), _diagnostics));
 
             var createInstanceCall = new BoundCall(
                 syntax,
@@ -402,7 +417,11 @@ namespace Microsoft.CodeAnalysis.CSharp
 
             if ((object)createInstance != null)
             {
-                rewrittenObjectCreation = _factory.Convert(node.Type, _factory.Call(null, createInstance, callGetTypeFromCLSID));
+                BoundCall instance = _factory.Call(null, createInstance, callGetTypeFromCLSID);
+                Debug.Assert(instance.Type.IsObjectType());
+                Conversion c = _factory.ClassifyEmitConversion(instance, node.Type);
+                Debug.Assert(c.IsReference);
+                rewrittenObjectCreation = _factory.Convert(node.Type, instance, c);
             }
             else
             {

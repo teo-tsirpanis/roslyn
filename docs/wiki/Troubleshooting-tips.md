@@ -1,6 +1,6 @@
 # Capturing a crash dump
 
-## Using a registry setting
+## Using a registry setting (recommended on Windows)
 
 Create a registry key file (`dump.reg`) with the contents below, then execute it. The settings mean that every crash will produce a full dump (`DumpType`=2) in the folder specified by `DumpFolder`, and at most one will be kept (every subsequent crash will overwrite the file, because `DumpCount`=1).
 
@@ -19,6 +19,10 @@ Windows Registry Editor Version 5.00
 
 More [information](https://msdn.microsoft.com/en-us/library/windows/desktop/bb787181(v=vs.85).aspx)
 
+## Using environment variables (recommended on Linux)
+
+Define the container with the [correct variables](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/collect-dumps-crash) to collect a dump on crash.
+
 # Running the compiler with a long command line
 
 Often times the command-line recorded by msbuild logs is very long. Simply copy/pasting it into a command window fails, because the line gets truncated.
@@ -29,7 +33,7 @@ The solution is to copy the command-line options into a test file (for instance,
 
 If you have access to a command-line, simply running `csc.exe` will print out the version of the compiler.
 
-For environments where you cannot use the command-line, you can include `#error version` in your program and the compiler and language versions will be printed as an error message. (Note this only works with C# 7.1 or later)
+For environments where you cannot use the command-line, you can include `#error version` in your program and the compiler and language versions will be printed as an error message. (Note this only works with compiler version 2.3 or later, which shipped with Visual Studio 2017 version 15.3)
 
 # Investigating regressions and back compat issues
 
@@ -80,3 +84,4 @@ There are three significant candidates to investigate:
   Use `/p:Features=debug-determinism` to create an additional output file that documents all the inputs to a particular compilation.  
   The file is written next to the compilation output and has a `.key` suffix.  
   Comparing those files between slow and fast runs helps detect pertinent changes (new inputs, new references, etc).  
+  See [Generate a Deterministic Key File](../compilers/Deterministic%20Inputs.md#1-generate-a-deterministic-key-file) for more details.  

@@ -5,11 +5,11 @@
 using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis.CodeStyle;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.LanguageService;
-using Microsoft.CodeAnalysis.Options;
-using Microsoft.CodeAnalysis.Shared.Collections;
 using Microsoft.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis.UseCollectionInitializer;
 
 namespace Microsoft.CodeAnalysis.UseObjectInitializer;
 
@@ -62,13 +62,14 @@ internal abstract partial class AbstractUseObjectInitializerDiagnosticAnalyzer<
     protected abstract TAnalyzer GetAnalyzer();
 
     protected AbstractUseObjectInitializerDiagnosticAnalyzer()
-        : base(ImmutableDictionary<DiagnosticDescriptor, IOption2>.Empty
-                .Add(s_descriptor, CodeStyleOptions2.PreferObjectInitializer)
-                .Add(s_unnecessaryCodeDescriptor, CodeStyleOptions2.PreferObjectInitializer))
+        : base([(s_descriptor, CodeStyleOptions2.PreferObjectInitializer)])
     {
     }
 
     protected abstract ISyntaxFacts GetSyntaxFacts();
+
+    public sealed override DiagnosticAnalyzerCategory GetAnalyzerCategory()
+        => DiagnosticAnalyzerCategory.SemanticSpanAnalysis;
 
     protected sealed override void InitializeWorker(AnalysisContext context)
     {
@@ -139,6 +140,8 @@ internal abstract partial class AbstractUseObjectInitializerDiagnosticAnalyzer<
             properties: null));
 
         FadeOutCode(context, matches, locations);
+
+        return;
     }
 
     private void FadeOutCode(
@@ -152,31 +155,34 @@ internal abstract partial class AbstractUseObjectInitializerDiagnosticAnalyzer<
 
         foreach (var match in matches)
         {
+            using var additionalUnnecessaryLocations = TemporaryArray<Location>.Empty;
+
             var end = FadeOutOperatorToken
                 ? syntaxFacts.GetOperatorTokenOfMemberAccessExpression(match.MemberAccessExpression).Span.End
                 : syntaxFacts.GetExpressionOfMemberAccessExpression(match.MemberAccessExpression)!.Span.End;
 
             var location1 = Location.Create(syntaxTree, TextSpan.FromBounds(
                 match.MemberAccessExpression.SpanStart, end));
+            additionalUnnecessaryLocations.Add(location1);
 
             if (match.Statement.Span.End > match.Initializer.FullSpan.End)
             {
-                context.ReportDiagnostic(DiagnosticHelper.CreateWithLocationTags(
-                    s_unnecessaryCodeDescriptor,
-                    location1,
-                    NotificationOption2.ForSeverity(s_unnecessaryCodeDescriptor.DefaultSeverity),
-                    context.Options,
-                    additionalLocations: locations,
-                    additionalUnnecessaryLocations: [syntaxTree.GetLocation(TextSpan.FromBounds(match.Initializer.FullSpan.End, match.Statement.Span.End))]));
+                locations.Add(syntaxTree.GetLocation(TextSpan.FromBounds(match.Initializer.FullSpan.End, match.Statement.Span.End)));
             }
-            else
-            {
-                context.ReportDiagnostic(Diagnostic.Create(
-                    s_unnecessaryCodeDescriptor, location1, additionalLocations: locations));
-            }
+
+            if (additionalUnnecessaryLocations.Count == 0)
+                continue;
+
+            // Report the diagnostic at the first unnecessary location. This is the location where the code fix
+            // will be offered.
+            context.ReportDiagnostic(DiagnosticHelper.CreateWithLocationTags(
+                s_unnecessaryCodeDescriptor,
+                additionalUnnecessaryLocations[0],
+                NotificationOption2.ForSeverity(s_unnecessaryCodeDescriptor.DefaultSeverity),
+                context.Options,
+                additionalLocations: locations,
+                additionalUnnecessaryLocations: additionalUnnecessaryLocations.ToImmutableAndClear(),
+                properties: null));
         }
     }
-
-    public sealed override DiagnosticAnalyzerCategory GetAnalyzerCategory()
-        => DiagnosticAnalyzerCategory.SemanticSpanAnalysis;
 }

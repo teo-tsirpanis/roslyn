@@ -2580,6 +2580,7 @@ class Program
     interface IDisposable1
     {
         void Dispose(int i);
+        void Dispose(long i);
     }
 
     class C1 : IDisposable1
@@ -2591,6 +2592,9 @@ class Program
             System.Console.WriteLine(disposed);
             disposed = true;
         }
+        public void Dispose(long i)
+        {
+        }
     }
 
     struct S1 : IDisposable1
@@ -2601,6 +2605,9 @@ class Program
         {
             System.Console.WriteLine(disposed);
             disposed = true;
+        }
+        public void Dispose(long i)
+        {
         }
     }
 
@@ -2745,7 +2752,7 @@ class Program
         return 1;
     }
 }";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True
 False
@@ -2814,7 +2821,7 @@ class Program
     }
 }
 ";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True
 False
@@ -2895,7 +2902,7 @@ public class Program
     }
 }
 ";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True
 False
@@ -2965,7 +2972,7 @@ class Program
         return 1;
     }
 }";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True
 False
@@ -3048,7 +3055,7 @@ class Program
         return 1;
     }
 }";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True
 False
@@ -3131,7 +3138,7 @@ class Program
         return 1;
     }
 }";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True
 False
@@ -3363,7 +3370,7 @@ interface I1
 
 
 ";
-            var comp = CreateCompilationWithMscorlib45(source, references: new[] { CSharpRef });
+            var comp = CreateCompilationWithMscorlib461(source, references: new[] { CSharpRef });
             base.CompileAndVerify(comp);
         }
 
@@ -3412,7 +3419,7 @@ interface I1
     int CallAsync(int x);
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source, references: new[] { CSharpRef }, options: TestOptions.ReleaseExe);
+            var comp = CreateCompilationWithMscorlib461(source, references: new[] { CSharpRef }, options: TestOptions.ReleaseExe);
             base.CompileAndVerify(comp, expectedOutput: "420");
         }
 
@@ -4767,7 +4774,7 @@ class Program
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source, options: TestOptions.ReleaseExe);
+            var comp = CreateCompilationWithMscorlib461(source, options: TestOptions.ReleaseExe);
             CompileAndVerify(comp, expectedOutput: "").
                 VerifyIL("Program.Test0(ref System.WeakReference<string>)", @"
 {
@@ -5609,16 +5616,18 @@ unsafe class C
             var compilation = CreateCompilation(source, options: TestOptions.DebugExe.WithAllowUnsafe(true));
 
             compilation.VerifyDiagnostics(
-                // (16,41): error CS8977: 'void*' cannot be made nullable.
+                // (16,39): error CS0029: Cannot implicitly convert type 'void*' to 'object'
                 //         Func<object, object> a = o => c?.M();
-                Diagnostic(ErrorCode.ERR_CannotBeMadeNullable, ".M()").WithArguments("void*").WithLocation(16, 41),
-                // (19,39): error CS8977: 'void*' cannot be made nullable.
+                Diagnostic(ErrorCode.ERR_NoImplicitConv, "c?.M()").WithArguments("void*", "object").WithLocation(16, 39),
+                // (16,39): error CS1662: Cannot convert lambda expression to intended delegate type because some of the return types in the block are not implicitly convertible to the delegate return type
+                //         Func<object, object> a = o => c?.M();
+                Diagnostic(ErrorCode.ERR_CantConvAnonMethReturns, "c?.M()").WithArguments("lambda expression").WithLocation(16, 39),
+                // (19,37): error CS0029: Cannot implicitly convert type 'void*' to 'object'
                 //     static public object F2(C c) => c?.M();
-                Diagnostic(ErrorCode.ERR_CannotBeMadeNullable, ".M()").WithArguments("void*").WithLocation(19, 39),
-                // (21,42): error CS8977: 'void*' cannot be made nullable.
+                Diagnostic(ErrorCode.ERR_NoImplicitConv, "c?.M()").WithArguments("void*", "object").WithLocation(19, 37),
+                // (21,32): error CS0029: Cannot implicitly convert type 'void*' to 'object'
                 //     static public object P1 => (new C())?.M();
-                Diagnostic(ErrorCode.ERR_CannotBeMadeNullable, ".M()").WithArguments("void*").WithLocation(21, 42)
-                );
+                Diagnostic(ErrorCode.ERR_NoImplicitConv, "(new C())?.M()").WithArguments("void*", "object").WithLocation(21, 32));
         }
 
         [WorkItem(1109164, "http://vstfdevdiv:8080/DevDiv2/DevDiv/_workitems/edit/1109164")]
@@ -5810,7 +5819,6 @@ M
         public void ConditionalInAsyncTask()
         {
             var source = @"
-#pragma warning disable CS1998 // suppress 'no await in async' warning
 using System;
 using System.Threading.Tasks;
 
@@ -5852,7 +5860,7 @@ class Program
         new Goo<int>().M4();
     }
 }";
-            var compilation = CreateCompilationWithMscorlib45(
+            var compilation = CreateCompilationWithMscorlib461(
                 source, references: new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, options: TestOptions.DebugExe);
             CompileAndVerify(compilation, expectedOutput: "12456");
         }
@@ -6181,7 +6189,7 @@ class C
 
 
 ";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"FalseTrueTrue");
         }
 
@@ -6218,7 +6226,7 @@ class C
 
 
 ";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"FalseTrueTrue");
         }
 
@@ -6261,7 +6269,7 @@ class C
 
 
 ";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"FalseTrueTrue");
         }
 
@@ -6297,7 +6305,7 @@ class C
         }
     }
 ";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"#
 False#
 FalseqBarBar#
@@ -6340,7 +6348,7 @@ True");
         }
     }
 ";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True");
         }
@@ -6375,7 +6383,7 @@ True");
             return arg;
         }
     }";
-            var c = CreateCompilationWithMscorlib45(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
+            var c = CreateCompilationWithMscorlib461(source, new[] { SystemRef_v4_0_30319_17929, SystemCoreRef_v4_0_30319_17929, CSharpRef }, TestOptions.ReleaseExe);
             var comp = CompileAndVerify(c, expectedOutput: @"False
 True");
         }

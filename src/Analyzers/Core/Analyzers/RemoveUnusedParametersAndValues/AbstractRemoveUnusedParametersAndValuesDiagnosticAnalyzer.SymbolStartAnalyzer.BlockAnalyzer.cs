@@ -485,6 +485,8 @@ internal abstract partial class AbstractRemoveUnusedParametersAndValuesDiagnosti
                 hasBlockWithAllUsedSymbolWrites = false;
                 hasUnknownOperationNoneDescendant = false;
 
+                var interpolatedStringHandlerAttribute = context.Compilation.InterpolatedStringHandlerAttributeType();
+
                 foreach (var operationBlock in context.OperationBlocks)
                 {
                     if (!ShouldAnalyze(operationBlock, context.OwningSymbol, ref hasUnknownOperationNoneDescendant))
@@ -559,7 +561,7 @@ internal abstract partial class AbstractRemoveUnusedParametersAndValuesDiagnosti
 
                                 if (shouldReport)
                                 {
-                                    _symbolStartAnalyzer.ReportUnusedParameterDiagnostic(unusedParameter, hasReference, context.ReportDiagnostic, context.Options, cancellationToken: context.CancellationToken);
+                                    _symbolStartAnalyzer.ReportUnusedParameterDiagnostic(unusedParameter, hasReference, context.ReportDiagnostic, context.Options, interpolatedStringHandlerAttribute, context.CancellationToken);
                                 }
                             }
 
@@ -589,8 +591,6 @@ internal abstract partial class AbstractRemoveUnusedParametersAndValuesDiagnosti
                     SymbolUsageResult resultFromFlowAnalysis,
                     out ImmutableDictionary<string, string?>? properties)
                 {
-                    Debug.Assert(symbol is not ILocalSymbol local || !local.IsRef);
-
                     properties = null;
 
                     // Bail out in following cases:
@@ -599,7 +599,13 @@ internal abstract partial class AbstractRemoveUnusedParametersAndValuesDiagnosti
                     //   3. Static local symbols. Assignment to static locals
                     //      is not unnecessary as the assigned value can be used on the next invocation.
                     //   4. Ignore special discard symbol names (see https://github.com/dotnet/roslyn/issues/32923).
-                    if (_options.UnusedValueAssignmentSeverity.Severity == ReportDiagnostic.Suppress ||
+                    //   5. By-ref parameter or local symbols. Writes to by-ref symbols are
+                    //      visible to the caller and may be observed across threads, so they
+                    //      should not be flagged as redundant
+                    //      (see https://github.com/dotnet/roslyn/issues/44100).
+                    if (symbol is IParameterSymbol { RefKind: not RefKind.None } ||
+                        symbol is ILocalSymbol { RefKind: not RefKind.None } ||
+                        _options.UnusedValueAssignmentSeverity.Severity == ReportDiagnostic.Suppress ||
                         symbol.GetSymbolType().IsErrorType() ||
                         (symbol.IsStatic && symbol.Kind == SymbolKind.Local) ||
                         symbol.IsSymbolWithSpecialDiscardName())

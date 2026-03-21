@@ -8,7 +8,6 @@ using System.Collections.Immutable;
 using System.Composition;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
-using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -30,7 +29,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Completion.Providers;
 [ExtensionOrder(After = nameof(EnumAndCompletionListTagCompletionProvider))]
 [method: ImportingConstructor]
 [method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
-internal sealed class CrefCompletionProvider() : AbstractCrefCompletionProvider
+internal sealed class CrefCompletionProvider(
+    KeywordCompletionProvider keywordCompletionProvider) : AbstractCrefCompletionProvider
 {
     private static readonly SymbolDisplayFormat QualifiedCrefFormat =
         new(globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Omitted,
@@ -47,6 +47,7 @@ internal sealed class CrefCompletionProvider() : AbstractCrefCompletionProvider
     private static readonly SymbolDisplayFormat MinimalParameterTypeFormat =
         SymbolDisplayFormat.MinimallyQualifiedFormat.AddMiscellaneousOptions(SymbolDisplayMiscellaneousOptions.ExpandValueTuple);
 
+    private readonly KeywordCompletionProvider _keywordCompletionProvider = keywordCompletionProvider;
     private Action<SyntaxNode?>? _testSpeculativeNodeCallback;
 
     internal override string Language => LanguageNames.CSharp;
@@ -74,13 +75,13 @@ internal sealed class CrefCompletionProvider() : AbstractCrefCompletionProvider
 
             context.IsExclusive = true;
 
-            var text = await document.GetValueTextAsync(cancellationToken).ConfigureAwait(false);
-            var span = GetCompletionItemSpan(text, position);
-            var serializedOptions = ImmutableArray.Create(new KeyValuePair<string, string>(HideAdvancedMembers, options.HideAdvancedMembers.ToString()));
+            var serializedOptions = ImmutableArray.Create(KeyValuePair.Create(HideAdvancedMembers, options.MemberDisplayOptions.HideAdvancedMembers.ToString()));
 
-            var items = CreateCompletionItems(semanticModel, symbols, token, position, serializedOptions);
+            context.AddItems(CreateCompletionItems(semanticModel, symbols, token, position, serializedOptions));
 
-            context.AddItems(items);
+            // Because we took over completion entirely as an exclusive provider, we have to ensure that appropriate
+            // keywords are provided ourselves.
+            await _keywordCompletionProvider.ProvideCompletionsAsync(context).ConfigureAwait(false);
         }
         catch (Exception e) when (FatalError.ReportAndCatchUnlessCanceled(e, ErrorSeverity.General))
         {
@@ -108,7 +109,7 @@ internal sealed class CrefCompletionProvider() : AbstractCrefCompletionProvider
             parentNode, cancellationToken).ConfigureAwait(false);
 
         var symbols = GetSymbols(token, semanticModel, cancellationToken)
-            .FilterToVisibleAndBrowsableSymbols(options.HideAdvancedMembers, semanticModel.Compilation);
+            .FilterToVisibleAndBrowsableSymbols(options.MemberDisplayOptions.HideAdvancedMembers, semanticModel.Compilation, inclusionFilter: static s => true);
 
         return (token, semanticModel, symbols);
     }
@@ -225,15 +226,6 @@ internal sealed class CrefCompletionProvider() : AbstractCrefCompletionProvider
         return result.ToImmutableAndClear();
     }
 
-    private static TextSpan GetCompletionItemSpan(SourceText text, int position)
-    {
-        return CommonCompletionUtilities.GetWordSpan(
-            text,
-            position,
-            ch => CompletionUtilities.IsCompletionItemStartCharacter(ch) || ch == '{',
-            ch => CompletionUtilities.IsWordCharacter(ch) || ch is '{' or '}');
-    }
-
     private static IEnumerable<CompletionItem> CreateCompletionItems(
         SemanticModel semanticModel, ImmutableArray<ISymbol> symbols, SyntaxToken token, int position, ImmutableArray<KeyValuePair<string, string>> options)
     {
@@ -338,7 +330,7 @@ internal sealed class CrefCompletionProvider() : AbstractCrefCompletionProvider
             displayText: insertionText,
             displayTextSuffix: "",
             insertionText: insertionText,
-            symbols: ImmutableArray.Create(symbol),
+            symbols: [symbol],
             contextPosition: position,
             sortText: sortText,
             filterText: insertionText,

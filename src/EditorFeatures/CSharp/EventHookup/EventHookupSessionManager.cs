@@ -8,16 +8,17 @@ using System;
 using System.ComponentModel.Composition;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.Classification;
 using Microsoft.CodeAnalysis.Editor.Shared.Extensions;
 using Microsoft.CodeAnalysis.Editor.Shared.Utilities;
 using Microsoft.CodeAnalysis.Host.Mef;
-using Microsoft.CodeAnalysis.Options;
 using Microsoft.CodeAnalysis.Shared.TestHooks;
+using Microsoft.VisualStudio.Language.Suggestions;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Adornments;
 using Microsoft.VisualStudio.Text.Editor;
-using Roslyn.Utilities;
+using Microsoft.VisualStudio.Threading;
 
 namespace Microsoft.CodeAnalysis.Editor.CSharp.EventHookup;
 
@@ -27,23 +28,44 @@ namespace Microsoft.CodeAnalysis.Editor.CSharp.EventHookup;
 internal sealed partial class EventHookupSessionManager(
     IThreadingContext threadingContext,
     IToolTipService toolTipService,
-    IGlobalOptionService globalOptions)
+    Lazy<SuggestionServiceBase> suggestionServiceBase)
 {
     public readonly IThreadingContext ThreadingContext = threadingContext;
     private readonly IToolTipService _toolTipService = toolTipService;
-    private readonly IGlobalOptionService _globalOptions = globalOptions;
+    internal readonly Lazy<SuggestionServiceBase> SuggestionServiceBase = suggestionServiceBase;
 
     private IToolTipPresenter _toolTipPresenter;
+    private VisualStudio.Threading.IAsyncDisposable _suggestionBlocker;
 
-    internal EventHookupSession CurrentSession { get; set; }
+    internal EventHookupSession CurrentSession
+    {
+        get
+        {
+            ThreadingContext.ThrowIfNotOnUIThread();
+            return field;
+        }
+
+        set
+        {
+            ThreadingContext.ThrowIfNotOnUIThread();
+            field?.CancelBackgroundTasks();
+            field = value;
+        }
+    }
 
     // For test purposes only!
     internal ClassifiedTextElement[] TEST_MostRecentToolTipContent { get; set; }
 
-    internal void EventHookupFoundInSession(EventHookupSession analyzedSession)
+    public async Task EventHookupFoundInSessionAsync(
+        EventHookupSession analyzedSession, string eventName, CancellationToken cancellationToken)
     {
-        ThreadingContext.ThrowIfNotOnUIThread();
+        await this.ThreadingContext.JoinableTaskFactory.SwitchToMainThreadAsync(alwaysYield: true, cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+            return;
 
+        // Now that we've switched to the UI thread, the rest of the work is not cancellable.  We're about to be making
+        // mutations, and we don't want to stop somewhere in the middle of that.
+        cancellationToken = default;
         var caretPoint = analyzedSession.TextView.GetCaretPoint(analyzedSession.SubjectBuffer);
 
         // only generate tooltip if it is not already shown (_toolTipPresenter == null)
@@ -52,7 +74,7 @@ internal sealed partial class EventHookupSessionManager(
         if (_toolTipPresenter == null &&
             CurrentSession == analyzedSession &&
             caretPoint.HasValue &&
-            IsCaretWithinSpanOrAtEnd(analyzedSession.TrackingSpan, analyzedSession.TextView.TextSnapshot, caretPoint.Value))
+            IsCaretWithinSpanOrAtEnd(analyzedSession.TrackingSpan, analyzedSession.SubjectBuffer.CurrentSnapshot, caretPoint.Value))
         {
             // Create a tooltip presenter that stays alive, even when the user types, without tracking the mouse.
             _toolTipPresenter = _toolTipService.CreatePresenter(analyzedSession.TextView,
@@ -62,7 +84,7 @@ internal sealed partial class EventHookupSessionManager(
             // GetEventNameTask() gets back the event name, only needs to add a semicolon after it.
             var textRuns = new[]
             {
-                new ClassifiedTextRun(ClassificationTypeNames.MethodName, analyzedSession.GetEventNameTask.Result, ClassifiedTextRunStyle.UseClassificationFont),
+                new ClassifiedTextRun(ClassificationTypeNames.MethodName, eventName, ClassifiedTextRunStyle.UseClassificationFont),
                 new ClassifiedTextRun(ClassificationTypeNames.Punctuation, ";", ClassifiedTextRunStyle.UseClassificationFont),
                 new ClassifiedTextRun(ClassificationTypeNames.Text, CSharpEditorResources.Press_TAB_to_insert),
             };
@@ -79,6 +101,16 @@ internal sealed partial class EventHookupSessionManager(
 
             analyzedSession.TextView.Caret.PositionChanged += Caret_PositionChanged;
             CurrentSession.Dismissed += () => { analyzedSession.TextView.Caret.PositionChanged -= Caret_PositionChanged; };
+
+            // Dismiss and suppress gray text proposals for the duration of the event hookup session. Note we pass
+            // CancellationToken.None here as we don't actually want to cancel this operation, since we've already
+            // made UI changes/hookup that we now have to go through.  We are technically safe, as we've cleared
+            // out cancellationToken above, but this is an extra level safety.
+            //
+            // Also, 'ConfigureAwait(true)' on everything here as we want to stay on the UI thread.
+            _suggestionBlocker?.DisposeAsync().ConfigureAwait(true);
+            _suggestionBlocker = await SuggestionServiceBase.Value.DismissAndBlockProposalsAsync(
+                analyzedSession.TextView, ReasonForDismiss.DismissedAfterBufferChange, CancellationToken.None).ConfigureAwait(true);
         }
     }
 
@@ -108,27 +140,25 @@ internal sealed partial class EventHookupSessionManager(
         EventHookupCommandHandler eventHookupCommandHandler,
         ITextView textView,
         ITextBuffer subjectBuffer,
+        int position,
+        Document document,
         IAsynchronousOperationListener asyncListener,
         Mutex testSessionHookupMutex)
     {
-        CurrentSession = new EventHookupSession(this, eventHookupCommandHandler, textView, subjectBuffer, asyncListener, _globalOptions, testSessionHookupMutex);
+        CurrentSession = new EventHookupSession(
+            this, eventHookupCommandHandler, textView, subjectBuffer, position, document, asyncListener, testSessionHookupMutex);
     }
 
-    internal void CancelAndDismissExistingSessions()
+    public void DismissExistingSessions()
     {
         ThreadingContext.ThrowIfNotOnUIThread();
 
-        if (CurrentSession != null)
-        {
-            CurrentSession.Cancel();
-            CurrentSession = null;
-        }
+        _toolTipPresenter?.Dismiss();
+        _toolTipPresenter = null;
+        _suggestionBlocker?.DisposeAsync().Forget();
+        _suggestionBlocker = null;
 
-        if (_toolTipPresenter != null)
-        {
-            _toolTipPresenter.Dismiss();
-            _toolTipPresenter = null;
-        }
+        CurrentSession = null;
 
         // For test purposes only!
         TEST_MostRecentToolTipContent = null;
@@ -145,7 +175,7 @@ internal sealed partial class EventHookupSessionManager(
         {
             if (change.OldText.Length > 0 || change.NewText.Any(c => c != ' '))
             {
-                CancelAndDismissExistingSessions();
+                DismissExistingSessions();
                 return;
             }
         }
@@ -160,7 +190,7 @@ internal sealed partial class EventHookupSessionManager(
 
         if (CurrentSession == null)
         {
-            CancelAndDismissExistingSessions();
+            DismissExistingSessions();
             return;
         }
 
@@ -168,16 +198,13 @@ internal sealed partial class EventHookupSessionManager(
 
         if (!caretPoint.HasValue)
         {
-            CancelAndDismissExistingSessions();
+            DismissExistingSessions();
         }
 
-        var snapshotSpan = CurrentSession.TrackingSpan.GetSpan(CurrentSession.TextView.TextSnapshot);
+        var snapshotSpan = CurrentSession.TrackingSpan.GetSpan(CurrentSession.SubjectBuffer.CurrentSnapshot);
         if (snapshotSpan.Snapshot != caretPoint.Value.Snapshot || !snapshotSpan.Contains(caretPoint.Value))
         {
-            CancelAndDismissExistingSessions();
+            DismissExistingSessions();
         }
     }
-
-    internal bool IsTrackingSession()
-        => CurrentSession != null;
 }

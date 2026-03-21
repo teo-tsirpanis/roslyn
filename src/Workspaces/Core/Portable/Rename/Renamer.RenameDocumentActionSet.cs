@@ -7,7 +7,6 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.CodeAnalysis.Options;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 
 namespace Microsoft.CodeAnalysis.Rename;
@@ -140,7 +139,7 @@ public static partial class Renamer
             // this issue. 
             var project = solution.GetRequiredProject(_documentId.ProjectId);
             return project.Documents.FirstOrDefault(d => d.Name == _documentName && d.Folders.SequenceEqual(_documentFolders))
-                ?? throw new InvalidOperationException(WorkspaceExtensionsResources.The_solution_does_not_contain_the_specified_document);
+                ?? throw ISolutionExtensions.CreateDocumentNotFoundException(_documentName);
         }
     }
 }

@@ -4,10 +4,12 @@
 
 #nullable disable
 
+using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using Microsoft.CodeAnalysis.CSharp.Symbols;
 using Microsoft.CodeAnalysis.PooledObjects;
-using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp
 {
@@ -139,43 +141,168 @@ namespace Microsoft.CodeAnalysis.CSharp
 
             var children = ArrayBuilder<MergedNamespaceOrTypeDeclaration>.GetInstance();
 
-            if (namespaces != null)
-            {
-                if (allNamespacesHaveSameName)
-                {
-                    children.Add(MergedNamespaceDeclaration.Create(namespaces.ToImmutableAndFree()));
-                }
-                else
-                {
-                    var namespaceGroups = namespaces.ToDictionary(n => n.Name, StringOrdinalComparer.Instance);
-                    namespaces.Free();
-
-                    foreach (var namespaceGroup in namespaceGroups.Values)
-                    {
-                        children.Add(MergedNamespaceDeclaration.Create(namespaceGroup));
-                    }
-                }
-            }
-
-            if (types != null)
-            {
-                if (allTypesHaveSameIdentity)
-                {
-                    children.Add(new MergedTypeDeclaration(types.ToImmutableAndFree()));
-                }
-                else
-                {
-                    var typeGroups = types.ToDictionary(t => t.Identity);
-                    types.Free();
-
-                    foreach (var typeGroup in typeGroups.Values)
-                    {
-                        children.Add(new MergedTypeDeclaration(typeGroup));
-                    }
-                }
-            }
+            addNamespacesToChildren(namespaces, allNamespacesHaveSameName, children);
+            addTypesToChildren(types, allTypesHaveSameIdentity, children);
 
             return children.ToImmutableAndFree();
+
+            static void addNamespacesToChildren(ArrayBuilder<SingleNamespaceDeclaration> namespaces, bool allNamespacesHaveSameName, ArrayBuilder<MergedNamespaceOrTypeDeclaration> children)
+            {
+                if (namespaces != null)
+                {
+                    if (allNamespacesHaveSameName)
+                    {
+                        children.Add(MergedNamespaceDeclaration.Create(namespaces.ToImmutableAndFree()));
+                    }
+                    else
+                    {
+                        // PERF: Not using ArrayBuilder as the value in this dictionary as these arrays commonly
+                        // exceed the builder threshold. Instead, calculate the number of SingleNamespaceDeclaration
+                        // for each name and create an exactly sized array.
+                        var namespaceGroups = PooledDictionary<string, (SingleNamespaceDeclaration[] Declarations, int Index)>.GetInstance();
+                        var namespaceCounts = PooledDictionary<string, int>.GetInstance();
+
+                        // First pass - collect the number of times each namespace name is present
+                        populateNamespaceCounts(namespaces, namespaceCounts);
+
+                        // Second pass - populate the mapping from namespace name to matching namespace declarations
+                        populateNamespaceGroups(namespaces, namespaceGroups, namespaceCounts);
+
+                        // Third pass - populate the children collection based on the namespace groupings
+                        populateChildren(children, namespaceGroups);
+
+                        namespaces.Free();
+                        namespaceCounts.Free();
+                        namespaceGroups.Free();
+                    }
+                }
+
+                static void populateNamespaceCounts(ArrayBuilder<SingleNamespaceDeclaration> namespaces, PooledDictionary<string, int> namespaceCounts)
+                {
+                    Debug.Assert(namespaces.Count > 0);
+
+                    var name = namespaces[0].Name;
+                    var count = 0;
+
+                    foreach (var n in namespaces)
+                    {
+                        // Slight optimization as same named namespaces are likely grouped together. This is a high-traffic codepath
+                        // and this reduces dictionary lookups
+                        if (n.Name != name)
+                        {
+                            // Write out to the dictionary the updated count for name
+                            namespaceCounts[name] = count;
+
+                            name = n.Name;
+                            count = namespaceCounts.TryGetValue(name, out var oldCount) ? oldCount : 0;
+                        }
+
+                        count++;
+                    }
+
+                    // Write out to the dictionary the updated count for name
+                    namespaceCounts[name] = count;
+                }
+
+                static void populateNamespaceGroups(ArrayBuilder<SingleNamespaceDeclaration> namespaces, PooledDictionary<string, (SingleNamespaceDeclaration[] Declarations, int Index)> namespaceGroups, PooledDictionary<string, int> namespaceCounts)
+                {
+                    Debug.Assert(namespaces.Count > 0);
+
+                    var name = namespaces[0].Name;
+                    var declarations = new SingleNamespaceDeclaration[namespaceCounts[name]];
+                    var index = 0;
+
+                    foreach (var n in namespaces)
+                    {
+                        // Slight optimization as same named namespaces are likely grouped together. This is a high-traffic codepath
+                        // and this reduces dictionary lookups and writes
+                        if (n.Name != name)
+                        {
+                            // Write out to the dictionary the updated declarations and index for name
+                            namespaceGroups[name] = (declarations, index);
+
+                            name = n.Name;
+                            (declarations, index) = namespaceGroups.TryGetValue(name, out var declAndIndex)
+                                ? declAndIndex
+                                : (new SingleNamespaceDeclaration[namespaceCounts[name]], 0);
+                        }
+
+                        declarations[index] = n;
+                        index++;
+                    }
+
+                    // Write out to the dictionary the updated declarations and index for name
+                    namespaceGroups[name] = (declarations, index);
+                }
+
+                static void populateChildren(ArrayBuilder<MergedNamespaceOrTypeDeclaration> children, PooledDictionary<string, (SingleNamespaceDeclaration[] Declarations, int Index)> namespaceGroups)
+                {
+                    foreach (var (_, namespaceGroup) in namespaceGroups)
+                    {
+                        var declarations = ImmutableCollectionsMarshal.AsImmutableArray(namespaceGroup.Declarations);
+                        children.Add(MergedNamespaceDeclaration.Create(declarations));
+                    }
+                }
+            }
+
+            static void addTypesToChildren(ArrayBuilder<SingleTypeDeclaration> types, bool allTypesHaveSameIdentity, ArrayBuilder<MergedNamespaceOrTypeDeclaration> children)
+            {
+                if (types != null)
+                {
+                    if (allTypesHaveSameIdentity)
+                    {
+                        children.Add(new MergedTypeDeclaration(types.ToImmutableAndFree()));
+                    }
+                    else
+                    {
+                        // PERF: Use object as the value in this dictionary to efficiently represent single item collections.
+                        // If only a single object has been seen with a given identity, the value will be a SingleTypeDeclaration,
+                        // otherwise, the value will be an ArrayBuilder<SingleTypeDeclaration>. This code differs from
+                        // addNamespacesToChildren intentionally as the vast majority of identities are represented by only a
+                        // single item in the types collection.
+                        var typeGroups = PooledDictionary<SingleTypeDeclaration.TypeDeclarationIdentity, object>.GetInstance();
+
+                        foreach (var t in types)
+                        {
+                            var id = t.Identity;
+
+                            if (typeGroups.TryGetValue(id, out var existingValue))
+                            {
+                                if (existingValue is not ArrayBuilder<SingleTypeDeclaration> builder)
+                                {
+                                    builder = ArrayBuilder<SingleTypeDeclaration>.GetInstance();
+                                    builder.Add((SingleTypeDeclaration)existingValue);
+                                    typeGroups[id] = builder;
+                                }
+
+                                builder.Add(t);
+                            }
+                            else
+                            {
+                                typeGroups.Add(id, t);
+                            }
+                        }
+
+                        foreach (var (_, typeGroup) in typeGroups)
+                        {
+                            if (typeGroup is SingleTypeDeclaration t)
+                            {
+                                children.Add(new MergedTypeDeclaration([t]));
+                            }
+                            else
+                            {
+                                var builder = (ArrayBuilder<SingleTypeDeclaration>)typeGroup;
+                                children.Add(new MergedTypeDeclaration(builder.ToImmutableAndFree()));
+                            }
+                        }
+
+                        types.Free();
+
+                        // ArrayBuilder values were freed above.
+                        typeGroups.Free();
+                    }
+                }
+            }
         }
 
         public new ImmutableArray<MergedNamespaceOrTypeDeclaration> Children

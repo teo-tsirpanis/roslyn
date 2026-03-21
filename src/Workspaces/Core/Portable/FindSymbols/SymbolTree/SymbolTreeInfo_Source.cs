@@ -3,12 +3,11 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
-using System.Diagnostics;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Serialization;
 using Microsoft.CodeAnalysis.Storage;
@@ -16,9 +15,9 @@ using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.FindSymbols;
 
-internal partial class SymbolTreeInfo
+internal sealed partial class SymbolTreeInfo
 {
-    private static readonly SimplePool<MultiDictionary<string, INamespaceOrTypeSymbol>> s_symbolMapPool = new(() => []);
+    private static readonly ObjectPool<MultiDictionary<string, INamespaceOrTypeSymbol>> s_symbolMapPool = new(() => []);
 
     private static MultiDictionary<string, INamespaceOrTypeSymbol> AllocateSymbolMap()
         => s_symbolMapPool.Allocate();
@@ -72,7 +71,10 @@ internal partial class SymbolTreeInfo
     public static Task<Checksum> GetSourceSymbolsChecksumAsync(Project project, CancellationToken cancellationToken)
     {
         var lazy = s_projectToSourceChecksum.GetValue(
-            project.State, static p => AsyncLazy.Create(c => ComputeSourceSymbolsChecksumAsync(p, c)));
+            project.State,
+            static p => AsyncLazy.Create(
+                static (p, c) => ComputeSourceSymbolsChecksumAsync(p, c),
+                arg: p));
 
         return lazy.GetValueAsync(cancellationToken);
     }
@@ -136,7 +138,7 @@ internal partial class SymbolTreeInfo
                 checksum,
                 unsortedBuilderNodes.ToImmutable(),
                 inheritanceMap: [],
-                receiverTypeNameToExtensionMethodMap: null);
+                receiverTypeNameToExtensionMemberMap: null);
         }
         finally
         {

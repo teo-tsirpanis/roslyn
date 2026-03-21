@@ -8,7 +8,6 @@ $ErrorActionPreference="Stop"
 
 $VSSetupDir = Join-Path $ArtifactsDir "VSSetup\$configuration"
 $PackagesDir = Join-Path $ArtifactsDir "packages\$configuration"
-$PublishDataUrl = "https://raw.githubusercontent.com/dotnet/roslyn/main/eng/config/PublishData.json"
 
 $binaryLog = if (Test-Path variable:binaryLog) { $binaryLog } else { $false }
 $nodeReuse = if (Test-Path variable:nodeReuse) { $nodeReuse } else { $false }
@@ -27,20 +26,22 @@ function GetPublishData() {
     return $global:_PublishData
   }
 
-  Write-Host "Downloading $PublishDataUrl"
-  $content = (Invoke-WebRequest -Uri $PublishDataUrl -UseBasicParsing).Content
+  $publishDataFile = Join-Path $PSScriptRoot "config\PublishData.json"
+
+  Write-Host "Reading $publishDataFile"
+  $content = Get-Content -Path $publishDataFile -Raw
 
   return $global:_PublishData = ConvertFrom-Json $content
 }
 
-function GetBranchPublishData([string]$branchName) {
+function GetBranchPublishData() {
   $data = GetPublishData
 
-  if (Get-Member -InputObject $data.branches -Name $branchName) {
-    return $data.branches.$branchName
-  } else {
-    return $null
+  if ($data.branchInfo -eq $null) {
+    throw "No branchInfo entry found in PublishData.json"
   }
+
+  return $data.branchInfo
 }
 
 function GetFeedPublishData() {
@@ -48,13 +49,14 @@ function GetFeedPublishData() {
   return $data.feeds
 }
 
-function GetPackagesPublishData([string]$packageFeeds) {
+function GetPackagesPublishData() {
   $data = GetPublishData
-  if (Get-Member -InputObject $data.packages -Name $packageFeeds) {
-    return $data.packages.$packageFeeds
-  } else {
-    return $null
+
+  if ($data.packages -eq $null) {
+    throw "No packages entry found in PublishData.json"
   }
+
+  return $data.packages
 }
 
 function GetReleasePublishData([string]$releaseName) {
@@ -64,26 +66,6 @@ function GetReleasePublishData([string]$releaseName) {
     return $data.releases.$releaseName
   } else {
     return $null
-  }
-}
-
-# Handy function for executing a command in powershell and throwing if it 
-# fails.
-#
-# Use this when the full command is known at script authoring time and 
-# doesn't require any dynamic argument build up.  Example:
-#
-#   Exec-Block { & $msbuild Test.proj }
-# 
-# Original sample came from: http://jameskovacs.com/2010/02/25/the-exec-problem/
-function Exec-Block([scriptblock]$cmd) {
-  & $cmd
-
-  # Need to check both of these cases for errors as they represent different items
-  # - $?: did the powershell script block throw an error
-  # - $lastexitcode: did a windows command executed by the script block end in error
-  if ((-not $?) -or ($lastexitcode -ne 0)) {
-    throw "Command failed to execute: $cmd"
   }
 }
 
@@ -162,19 +144,6 @@ function Exec-Command([string]$command, [string]$commandArgs, [switch]$useConsol
   Exec-CommandCore -command $command -commandArgs $commandArgs -useConsole:$useConsole -echoCommand:$echoCommand
 }
 
-# Handy function for executing a powershell script in a clean environment with 
-# arguments.  Prefer this over & sourcing a script as it will both use a clean
-# environment and do proper error checking
-# 
-# The -useConsole argument controls if the process should re-use the current
-# console for output or return output as a string
-function Exec-Script([string]$script, [string]$scriptArgs = "", [switch]$useConsole = $true, [switch]$echoCommand = $true) {
-  if ($args -ne "") {
-    throw "Extra arguments passed to Exec-Script: $args"
-  }
-  Exec-CommandCore -command "pwsh" -commandArgs "-noprofile -executionPolicy RemoteSigned -file `"$script`" $scriptArgs" -useConsole:$useConsole -echoCommand:$echoCommand
-}
-
 # Handy function for executing a dotnet command without having to track down the 
 # proper dotnet executable or ensure it's on the path.
 function Exec-DotNet([string]$commandArgs = "", [switch]$useConsole = $true, [switch]$echoCommand = $true) {
@@ -200,6 +169,12 @@ function Ensure-DotnetSdk() {
   }
 
   throw "Could not find dotnet executable in $dotnetInstallDir"
+}
+
+function Test-LastExitCode() {
+  if ($LASTEXITCODE -ne 0) {
+    throw "Last command failed with exit code $LASTEXITCODE"
+  }
 }
 
 # Walks up the source tree, starting at the given file's directory, and returns a FileInfo object for the first .csproj file it finds, if any.
@@ -293,4 +268,22 @@ function Unsubst-TempDir() {
     $env:TEMP=$originalTemp
     $env:TMP=$originalTemp
   }
+}
+
+function EnablePreviewSdks() {
+  $vsInfo = LocateVisualStudio
+  if ($vsInfo -eq $null) {
+    # Preview SDKs are allowed when no Visual Studio instance is installed
+    Write-Host "No Visual Studio installation found; skipping enabling preview SDKs"
+    return
+  }
+
+  $vsId = $vsInfo.instanceId
+  $vsMajorVersion = $vsInfo.installationVersion.Split('.')[0]
+
+  $instanceDir = Join-Path ${env:USERPROFILE} "AppData\Local\Microsoft\VisualStudio\$vsMajorVersion.0_$vsId"
+  Create-Directory $instanceDir
+  $sdkFile = Join-Path $instanceDir "sdk.txt"
+  Write-Host "Enabling preview SDKs by writing to $sdkFile"
+  'UsePreviews=True' | Set-Content $sdkFile
 }

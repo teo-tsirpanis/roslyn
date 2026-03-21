@@ -11,13 +11,12 @@ using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.Internal.Log;
 using Microsoft.CodeAnalysis.PooledObjects;
-using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Storage;
 using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.FindSymbols;
 
-internal partial class SymbolTreeInfo
+internal sealed partial class SymbolTreeInfo
 {
     private const string PrefixSymbolTreeInfo = "<SymbolTreeInfo>";
     private static readonly Checksum SerializationFormatChecksum = Checksum.Create("25");
@@ -61,11 +60,10 @@ internal partial class SymbolTreeInfo
             var persistentStorageService = services.GetPersistentStorageService();
 
             var storage = await persistentStorageService.GetStorageAsync(solutionKey, cancellationToken).ConfigureAwait(false);
-            await using var _ = storage.ConfigureAwait(false);
 
             using (var stream = SerializableBytes.CreateWritableStream())
             {
-                using (var writer = new ObjectWriter(stream, leaveOpen: true, cancellationToken))
+                using (var writer = new ObjectWriter(stream, leaveOpen: true))
                 {
                     result.WriteTo(writer);
                 }
@@ -91,14 +89,13 @@ internal partial class SymbolTreeInfo
         var persistentStorageService = services.GetPersistentStorageService();
 
         var storage = await persistentStorageService.GetStorageAsync(solutionKey, cancellationToken).ConfigureAwait(false);
-        await using var _ = storage.ConfigureAwait(false);
 
         // Get the unique key to identify our data.
         var key = PrefixSymbolTreeInfo + keySuffix;
 
         // If the checksum doesn't need to match, then we can pass in 'null' here allowing any result to be found.
         using var stream = await storage.ReadStreamAsync(key, checksumMustMatch ? checksum : null, cancellationToken).ConfigureAwait(false);
-        using var reader = ObjectReader.TryGetReader(stream, cancellationToken: cancellationToken);
+        using var reader = ObjectReader.TryGetReader(stream);
 
         // We have some previously persisted data.  Attempt to read it back.  
         // If we're able to, and the version of the persisted data matches
@@ -131,18 +128,18 @@ internal partial class SymbolTreeInfo
             }
         }
 
-        if (_receiverTypeNameToExtensionMethodMap == null)
+        if (_receiverTypeNameToExtensionMemberMap == null)
         {
             writer.WriteInt32(0);
         }
         else
         {
-            writer.WriteInt32(_receiverTypeNameToExtensionMethodMap.Count);
-            foreach (var key in _receiverTypeNameToExtensionMethodMap.Keys)
+            writer.WriteInt32(_receiverTypeNameToExtensionMemberMap.Count);
+            foreach (var key in _receiverTypeNameToExtensionMemberMap.Keys)
             {
                 writer.WriteString(key);
 
-                var values = _receiverTypeNameToExtensionMethodMap[key];
+                var values = _receiverTypeNameToExtensionMemberMap[key];
                 writer.WriteInt32(values.Count);
 
                 foreach (var value in values)
@@ -227,16 +224,16 @@ internal partial class SymbolTreeInfo
                 }
             }
 
-            MultiDictionary<string, ExtensionMethodInfo>? receiverTypeNameToExtensionMethodMap;
+            MultiDictionary<string, ExtensionMemberInfo>? receiverTypeNameToExtensionMemberMap;
 
             var keyCount = reader.ReadInt32();
             if (keyCount == 0)
             {
-                receiverTypeNameToExtensionMethodMap = null;
+                receiverTypeNameToExtensionMemberMap = null;
             }
             else
             {
-                receiverTypeNameToExtensionMethodMap = [];
+                receiverTypeNameToExtensionMemberMap = [];
 
                 for (var i = 0; i < keyCount; i++)
                 {
@@ -248,7 +245,7 @@ internal partial class SymbolTreeInfo
                         var containerName = reader.ReadRequiredString();
                         var name = reader.ReadRequiredString();
 
-                        receiverTypeNameToExtensionMethodMap.Add(typeName, new ExtensionMethodInfo(containerName, name));
+                        receiverTypeNameToExtensionMemberMap.Add(typeName, new ExtensionMemberInfo(containerName, name));
                     }
                 }
             }
@@ -262,7 +259,7 @@ internal partial class SymbolTreeInfo
                 : null;
 
             return new SymbolTreeInfo(
-                checksum, nodes.ToImmutableAndClear(), spellChecker, inheritanceMap, receiverTypeNameToExtensionMethodMap);
+                checksum, nodes.ToImmutableAndClear(), spellChecker, inheritanceMap, receiverTypeNameToExtensionMemberMap);
         }
         catch
         {

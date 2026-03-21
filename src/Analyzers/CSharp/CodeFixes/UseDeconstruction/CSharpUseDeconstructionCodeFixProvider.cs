@@ -2,15 +2,12 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-#nullable disable
-
 using System;
 using System.Collections.Immutable;
 using System.Composition;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.CodeAnalysis.CodeActions;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp.Extensions;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -21,29 +18,26 @@ using Microsoft.CodeAnalysis.Shared.Extensions;
 
 namespace Microsoft.CodeAnalysis.CSharp.UseDeconstruction;
 
-[ExportCodeFixProvider(LanguageNames.CSharp, Name = PredefinedCodeFixProviderNames.UseDeconstruction), Shared]
-internal sealed class CSharpUseDeconstructionCodeFixProvider : SyntaxEditorBasedCodeFixProvider
-{
-    [ImportingConstructor]
-    [Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
-    public CSharpUseDeconstructionCodeFixProvider()
-    {
-    }
+using static SyntaxFactory;
 
+[ExportCodeFixProvider(LanguageNames.CSharp, Name = PredefinedCodeFixProviderNames.UseDeconstruction), Shared]
+[method: ImportingConstructor]
+[method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
+internal sealed class CSharpUseDeconstructionCodeFixProvider() : SyntaxEditorBasedCodeFixProvider
+{
     public override ImmutableArray<string> FixableDiagnosticIds
         => [IDEDiagnosticIds.UseDeconstructionDiagnosticId];
 
-    public override Task RegisterCodeFixesAsync(CodeFixContext context)
+    public override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         RegisterCodeFix(context, CSharpAnalyzersResources.Deconstruct_variable_declaration, nameof(CSharpAnalyzersResources.Deconstruct_variable_declaration));
-        return Task.CompletedTask;
     }
 
     protected override Task FixAllAsync(
         Document document, ImmutableArray<Diagnostic> diagnostics,
-        SyntaxEditor editor, CodeActionOptionsProvider fallbackOptions, CancellationToken cancellationToken)
+        SyntaxEditor editor, CancellationToken cancellationToken)
     {
-        var nodesToProcess = diagnostics.SelectAsArray(d => d.Location.FindToken(cancellationToken).Parent);
+        var nodesToProcess = diagnostics.SelectAsArray(d => d.Location.FindToken(cancellationToken).GetRequiredParent());
 
         // When doing a fix all, we have to avoid introducing the same name multiple times
         // into the same scope.  However, checking results after each change would be very
@@ -74,14 +68,14 @@ internal sealed class CSharpUseDeconstructionCodeFixProvider : SyntaxEditorBased
         ImmutableArray<MemberAccessExpressionSyntax> memberAccessExpressions = default;
         if (node is VariableDeclaratorSyntax variableDeclarator)
         {
-            var variableDeclaration = (VariableDeclarationSyntax)variableDeclarator.Parent;
+            var variableDeclaration = (VariableDeclarationSyntax)variableDeclarator.GetRequiredParent();
             if (CSharpUseDeconstructionDiagnosticAnalyzer.TryAnalyzeVariableDeclaration(
                     semanticModel, variableDeclaration,
                     out var tupleType, out memberAccessExpressions,
                     cancellationToken))
             {
                 editor.ReplaceNode(
-                    variableDeclaration.Parent,
+                    variableDeclaration.GetRequiredParent(),
                     (current, _) =>
                     {
                         var currentDeclarationStatement = (LocalDeclarationStatementSyntax)current;
@@ -121,7 +115,7 @@ internal sealed class CSharpUseDeconstructionCodeFixProvider : SyntaxEditorBased
         // Copy all the tokens/nodes from the existing foreach statement to the new foreach statement.
         // However, convert the existing declaration over to a "var (x, y)" declaration or (int x, int y)
         // tuple expression.
-        return SyntaxFactory.ForEachVariableStatement(
+        return ForEachVariableStatement(
             forEachStatement.AttributeLists,
             forEachStatement.AwaitKeyword,
             forEachStatement.ForEachKeyword,
@@ -139,11 +133,11 @@ internal sealed class CSharpUseDeconstructionCodeFixProvider : SyntaxEditorBased
         // Copy all the tokens/nodes from the existing declaration statement to the new assignment
         // statement. However, convert the existing declaration over to a "var (x, y)" declaration 
         // or (int x, int y) tuple expression.
-        return SyntaxFactory.ExpressionStatement(
-            SyntaxFactory.AssignmentExpression(
+        return ExpressionStatement(
+            AssignmentExpression(
                 SyntaxKind.SimpleAssignmentExpression,
                 CreateTupleOrDeclarationExpression(tupleType, declarationStatement.Declaration.Type),
-                variableDeclarator.Initializer.EqualsToken,
+                variableDeclarator.Initializer!.EqualsToken,
                 variableDeclarator.Initializer.Value),
             declarationStatement.SemicolonToken);
     }
@@ -160,15 +154,15 @@ internal sealed class CSharpUseDeconstructionCodeFixProvider : SyntaxEditorBased
     }
 
     private static DeclarationExpressionSyntax CreateDeclarationExpression(INamedTypeSymbol tupleType, TypeSyntax typeNode)
-        => SyntaxFactory.DeclarationExpression(
-            typeNode, SyntaxFactory.ParenthesizedVariableDesignation(
+        => DeclarationExpression(
+            typeNode, ParenthesizedVariableDesignation(
                 [.. tupleType.TupleElements.Select(
-                    e => SyntaxFactory.SingleVariableDesignation(SyntaxFactory.Identifier(e.Name.EscapeIdentifier())))]));
+                    e => SingleVariableDesignation(Identifier(e.Name.EscapeIdentifier())))]));
 
     private TupleExpressionSyntax CreateTupleExpression(TupleTypeSyntax typeNode)
-        => SyntaxFactory.TupleExpression(
+        => TupleExpression(
             typeNode.OpenParenToken,
-            SyntaxFactory.SeparatedList<ArgumentSyntax>(new SyntaxNodeOrTokenList(typeNode.Elements.GetWithSeparators().Select(ConvertTupleTypeElementComponent))),
+            SeparatedList<ArgumentSyntax>([.. typeNode.Elements.GetWithSeparators().Select(ConvertTupleTypeElementComponent)]),
             typeNode.CloseParenToken);
 
     private SyntaxNodeOrToken ConvertTupleTypeElementComponent(SyntaxNodeOrToken nodeOrToken)
@@ -181,10 +175,10 @@ internal sealed class CSharpUseDeconstructionCodeFixProvider : SyntaxEditorBased
 
         // "int x" as a tuple element directly translates to "int x" (a declaration expression
         // with a variable designation 'x').
-        var node = (TupleElementSyntax)nodeOrToken.AsNode();
-        return SyntaxFactory.Argument(
-            SyntaxFactory.DeclarationExpression(
+        var node = (TupleElementSyntax)nodeOrToken.AsNode()!;
+        return Argument(
+            DeclarationExpression(
                 node.Type,
-                SyntaxFactory.SingleVariableDesignation(node.Identifier)));
+                SingleVariableDesignation(node.Identifier)));
     }
 }

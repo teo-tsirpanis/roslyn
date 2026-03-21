@@ -5,6 +5,7 @@
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Formatting.Rules;
+using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Shared.Utilities;
 using Microsoft.CodeAnalysis.Text;
 using Roslyn.Utilities;
@@ -31,26 +32,14 @@ internal abstract class BaseFormattingRule : AbstractFormattingRule
     protected static void AddUnindentBlockOperation(
         List<IndentBlockOperation> list,
         SyntaxToken startToken,
-        SyntaxToken endToken,
-        bool includeTriviaAtEnd = false,
-        IndentBlockOption option = IndentBlockOption.RelativePosition)
+        SyntaxToken endToken)
     {
         if (startToken.Kind() == SyntaxKind.None || endToken.Kind() == SyntaxKind.None)
-        {
             return;
-        }
 
-        if (includeTriviaAtEnd)
-        {
-            list.Add(FormattingOperations.CreateIndentBlockOperation(startToken, endToken, indentationDelta: -1, option: option));
-        }
-        else
-        {
-            var startPosition = CommonFormattingHelpers.GetStartPositionOfSpan(startToken);
-            var endPosition = endToken.Span.End;
-
-            list.Add(FormattingOperations.CreateIndentBlockOperation(startToken, endToken, TextSpan.FromBounds(startPosition, endPosition), indentationDelta: -1, option: option));
-        }
+        list.Add(FormattingOperations.CreateIndentBlockOperation(
+            startToken, endToken, TextSpan.FromBounds(startToken.Span.Start, endToken.Span.End),
+            indentationDelta: -1, IndentBlockOption.RelativePosition));
     }
 
     protected static void AddAbsoluteZeroIndentBlockOperation(
@@ -116,13 +105,13 @@ internal abstract class BaseFormattingRule : AbstractFormattingRule
         list.Add(FormattingOperations.CreateRelativeIndentBlockOperation(baseToken, startToken, endToken, indentationDelta: 0, option: option));
     }
 
-    protected static void AddSuppressWrappingIfOnSingleLineOperation(List<SuppressOperation> list, SyntaxToken startToken, SyntaxToken endToken, SuppressOption extraOption = SuppressOption.None)
+    protected static void AddSuppressWrappingIfOnSingleLineOperation(ArrayBuilder<SuppressOperation> list, SyntaxToken startToken, SyntaxToken endToken, SuppressOption extraOption = SuppressOption.None)
         => AddSuppressOperation(list, startToken, endToken, SuppressOption.NoWrappingIfOnSingleLine | extraOption);
 
-    protected static void AddSuppressAllOperationIfOnMultipleLine(List<SuppressOperation> list, SyntaxToken startToken, SyntaxToken endToken, SuppressOption extraOption = SuppressOption.None)
+    protected static void AddSuppressAllOperationIfOnMultipleLine(ArrayBuilder<SuppressOperation> list, SyntaxToken startToken, SyntaxToken endToken, SuppressOption extraOption = SuppressOption.None)
         => AddSuppressOperation(list, startToken, endToken, SuppressOption.NoSpacingIfOnMultipleLine | SuppressOption.NoWrapping | extraOption);
 
-    protected static void AddSuppressOperation(List<SuppressOperation> list, SyntaxToken startToken, SyntaxToken endToken, SuppressOption option)
+    protected static void AddSuppressOperation(ArrayBuilder<SuppressOperation> list, SyntaxToken startToken, SyntaxToken endToken, SuppressOption option)
     {
         if (startToken.Kind() == SyntaxKind.None || endToken.Kind() == SyntaxKind.None)
         {
@@ -158,7 +147,7 @@ internal abstract class BaseFormattingRule : AbstractFormattingRule
     protected static AdjustSpacesOperation CreateAdjustSpacesOperation(int space, AdjustSpacesOption option)
         => FormattingOperations.CreateAdjustSpacesOperation(space, option);
 
-    protected static void AddBraceSuppressOperations(List<SuppressOperation> list, SyntaxNode node)
+    protected static void AddBraceSuppressOperations(ArrayBuilder<SuppressOperation> list, SyntaxNode node)
     {
         var bracePair = node.GetBracePair();
         if (!bracePair.IsValidBracketOrBracePair())

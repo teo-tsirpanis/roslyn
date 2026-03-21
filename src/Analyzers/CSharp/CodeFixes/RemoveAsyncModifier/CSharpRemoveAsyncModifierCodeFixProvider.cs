@@ -8,33 +8,31 @@ using System.Diagnostics.CodeAnalysis;
 using Microsoft.CodeAnalysis.CodeFixes;
 using Microsoft.CodeAnalysis.CSharp.Extensions;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.RemoveAsyncModifier;
-using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp.RemoveAsyncModifier;
 
+using static CSharpSyntaxTokens;
+
 [ExportCodeFixProvider(LanguageNames.CSharp, Name = PredefinedCodeFixProviderNames.RemoveAsyncModifier), Shared]
 [ExtensionOrder(After = PredefinedCodeFixProviderNames.MakeMethodSynchronous)]
-internal partial class CSharpRemoveAsyncModifierCodeFixProvider : AbstractRemoveAsyncModifierCodeFixProvider<ReturnStatementSyntax, ExpressionSyntax>
+[method: ImportingConstructor]
+[method: SuppressMessage("RoslynDiagnosticsReliability", "RS0033:Importing constructor should be [Obsolete]", Justification = "Used in test code: https://github.com/dotnet/roslyn/issues/42814")]
+internal sealed partial class CSharpRemoveAsyncModifierCodeFixProvider() : AbstractRemoveAsyncModifierCodeFixProvider<ReturnStatementSyntax, ExpressionSyntax>
 {
-    private const string CS1998 = nameof(CS1998); // This async method lacks 'await' operators and will run synchronously.
-
-    [ImportingConstructor]
-    [SuppressMessage("RoslynDiagnosticsReliability", "RS0033:Importing constructor should be [Obsolete]", Justification = "Used in test code: https://github.com/dotnet/roslyn/issues/42814")]
-    public CSharpRemoveAsyncModifierCodeFixProvider()
-    {
-    }
-
-    public override ImmutableArray<string> FixableDiagnosticIds { get; } = [CS1998];
+    public override ImmutableArray<string> FixableDiagnosticIds { get; } = [
+        IDEDiagnosticIds.RemoveUnnecessaryAsyncModifier,
+        IDEDiagnosticIds.RemoveUnnecessaryAsyncModifierInterfaceImplementationOrOverride];
 
     protected override bool IsAsyncSupportingFunctionSyntax(SyntaxNode node)
         => node.IsAsyncSupportingFunctionSyntax();
 
     protected override SyntaxNode? ConvertToBlockBody(SyntaxNode node, ExpressionSyntax expressionBody)
     {
-        var semicolonToken = SyntaxFactory.Token(SyntaxKind.SemicolonToken);
+        var semicolonToken = SemicolonToken;
         if (expressionBody.TryConvertToStatement(semicolonToken, createReturnStatementForExpression: false, out var statement))
         {
             var block = SyntaxFactory.Block(statement);

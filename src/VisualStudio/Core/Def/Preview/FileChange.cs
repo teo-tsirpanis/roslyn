@@ -2,19 +2,15 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-#nullable disable
-
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
 using System.Threading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Editor;
+using Microsoft.CodeAnalysis.Editor.Implementation.TextDiffing;
 using Microsoft.CodeAnalysis.Editor.Shared.Extensions;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Text;
-using Microsoft.CodeAnalysis.Text.Shared.Extensions;
 using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.LanguageServices.Implementation.Extensions;
@@ -22,22 +18,25 @@ using Microsoft.VisualStudio.LanguageServices.Implementation.ProjectSystem;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Differencing;
-using Roslyn.Utilities;
 
 namespace Microsoft.VisualStudio.LanguageServices.Implementation.Preview;
 
-internal class FileChange : AbstractChange
+internal sealed class FileChange : AbstractChange
 {
-    private readonly TextDocument _left;
-    private readonly TextDocument _right;
+    private readonly TextDocument? _left;
+    private readonly TextDocument? _right;
     private readonly IComponentModel _componentModel;
     public readonly DocumentId Id;
     private readonly ITextBuffer _buffer;
-    private readonly Encoding _encoding;
     private readonly IVsImageService2 _imageService;
 
-    public FileChange(TextDocument left,
-        TextDocument right,
+    private static readonly StringDifferenceOptions s_differenceOptions = new()
+    {
+        DifferenceType = StringDifferenceTypes.Line,
+    };
+
+    public FileChange(TextDocument? left,
+        TextDocument? right,
         IComponentModel componentModel,
         AbstractChange parent,
         PreviewEngine engine,
@@ -45,29 +44,30 @@ internal class FileChange : AbstractChange
     {
         Contract.ThrowIfFalse(left != null || right != null);
 
-        this.Id = left != null ? left.Id : right.Id;
+        this.Id = left != null ? left.Id : right!.Id;
         _left = left;
         _right = right;
         _imageService = imageService;
 
         _componentModel = componentModel;
         var bufferFactory = componentModel.GetService<ITextBufferFactoryService>();
+        var bufferCloneService = componentModel.GetService<ITextBufferCloneService>();
         var bufferText = left != null
             ? left.GetTextSynchronously(CancellationToken.None)
-            : right.GetTextSynchronously(CancellationToken.None);
-        _buffer = bufferFactory.CreateTextBuffer(bufferText.ToString(), bufferFactory.InertContentType);
-        _encoding = bufferText.Encoding;
+            : right!.GetTextSynchronously(CancellationToken.None);
+
+        _buffer = bufferCloneService.Clone(bufferText, bufferFactory.InertContentType);
 
         this.Children = ComputeChildren(left, right, CancellationToken.None);
         this.parent = parent;
     }
 
-    private ChangeList ComputeChildren(TextDocument left, TextDocument right, CancellationToken cancellationToken)
+    private ChangeList ComputeChildren(TextDocument? left, TextDocument? right, CancellationToken cancellationToken)
     {
         if (left == null)
         {
             // Added document.
-            return GetEntireDocumentAsSpanChange(right);
+            return GetEntireDocumentAsSpanChange(right!);
         }
         else if (right == null)
         {
@@ -79,12 +79,13 @@ internal class FileChange : AbstractChange
         var newText = right.GetTextSynchronously(cancellationToken);
 
         var diffSelector = _componentModel.GetService<ITextDifferencingSelectorService>();
+        var bufferFactoryService = _componentModel.GetService<ITextBufferFactoryService>();
         var diffService = diffSelector.GetTextDifferencingService(
-            left.Project.Services.GetService<IContentTypeLanguageService>().GetDefaultContentType());
+            left.Project.Services.GetRequiredService<IContentTypeLanguageService>().GetDefaultContentType());
 
         diffService ??= diffSelector.DefaultTextDifferencingService;
 
-        var diff = ComputeDiffSpans(diffService, left, right, cancellationToken);
+        var diff = ComputeDiffSpans(diffService, left, right, bufferFactoryService, cancellationToken);
         if (diff.Differences.Count == 0)
         {
             // There are no changes.
@@ -132,10 +133,10 @@ internal class FileChange : AbstractChange
     {
         if (excerpt.Contains("\r\n"))
         {
-            var split = excerpt.Split(new[] { "\r\n" }, StringSplitOptions.RemoveEmptyEntries);
+            var split = excerpt.Split(["\r\n"], StringSplitOptions.RemoveEmptyEntries);
             if (split.Length > 1)
             {
-                return string.Format("{0} ... {1}", split[0].Trim(), split[split.Length - 1].Trim());
+                return string.Format("{0} ... {1}", split[0].Trim(), split[^1].Trim());
             }
         }
 
@@ -146,7 +147,7 @@ internal class FileChange : AbstractChange
     {
         if (_left == null)
         {
-            pbstrText = ServicesVSResources.bracket_plus_bracket + _right.Name;
+            pbstrText = ServicesVSResources.bracket_plus_bracket + _right!.Name;
         }
         else if (_right == null)
         {
@@ -161,7 +162,7 @@ internal class FileChange : AbstractChange
         return VSConstants.S_OK;
     }
 
-    public override int GetTipText(out VSTREETOOLTIPTYPE eTipType, out string pbstrText)
+    public override int GetTipText(out VSTREETOOLTIPTYPE eTipType, out string? pbstrText)
     {
         eTipType = VSTREETOOLTIPTYPE.TIPTYPE_DEFAULT;
         pbstrText = null;
@@ -191,13 +192,13 @@ internal class FileChange : AbstractChange
             edit.ApplyAndLogExceptions();
         }
 
-        return SourceText.From(_buffer.CurrentSnapshot.GetText(), _encoding);
+        return _buffer.CurrentSnapshot.AsText();
     }
 
-    public TextDocument GetOldDocument()
+    public TextDocument? GetOldDocument()
         => _left;
 
-    public TextDocument GetUpdatedDocument()
+    public TextDocument? GetUpdatedDocument()
     {
         if (_left == null || _right == null)
         {
@@ -209,11 +210,11 @@ internal class FileChange : AbstractChange
     }
 
     // Note that either _left or _right *must* be non-null (we are either adding, removing or changing a file).
-    public TextDocumentKind ChangedDocumentKind => (_left ?? _right).Kind;
+    public TextDocumentKind ChangedDocumentKind => (_left ?? _right!).Kind;
 
     internal override void GetDisplayData(VSTREEDISPLAYDATA[] pData)
     {
-        var document = _right ?? _left;
+        var document = _right ?? _left!;
 
         // If these are documents from a VS workspace, then attempt to get the right display
         // data from the underlying VSHierarchy and itemids for the document.
@@ -232,7 +233,7 @@ internal class FileChange : AbstractChange
                                                                   (ushort)StandardGlyphGroup.GlyphGroupClass;
     }
 
-    private static IHierarchicalDifferenceCollection ComputeDiffSpans(ITextDifferencingService diffService, TextDocument left, TextDocument right, CancellationToken cancellationToken)
+    private static IHierarchicalDifferenceCollection ComputeDiffSpans(ITextDifferencingService diffService, TextDocument left, TextDocument right, ITextBufferFactoryService bufferFactoryService, CancellationToken cancellationToken)
     {
         // TODO: it would be nice to have a syntax based differ for presentation here, 
         //       current way of just using text differ has its own issue, and using syntax differ in compiler that are for incremental parser
@@ -241,12 +242,6 @@ internal class FileChange : AbstractChange
         var oldText = left.GetTextSynchronously(cancellationToken);
         var newText = right.GetTextSynchronously(cancellationToken);
 
-        var oldString = oldText.ToString();
-        var newString = newText.ToString();
-
-        return diffService.DiffStrings(oldString, newString, new StringDifferenceOptions()
-        {
-            DifferenceType = StringDifferenceTypes.Line,
-        });
+        return diffService.DiffSourceTexts(oldText, newText, bufferFactoryService, s_differenceOptions);
     }
 }

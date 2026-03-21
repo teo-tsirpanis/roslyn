@@ -19,7 +19,7 @@ internal abstract partial class AbstractAddImportFeatureService<TSimpleNameSynta
     /// SearchScope used for searching *only* the source symbols contained within a project/compilation.
     /// i.e. symbols from metadata will not be searched.
     /// </summary>
-    private class SourceSymbolsProjectSearchScope(
+    private sealed class SourceSymbolsProjectSearchScope(
         AbstractAddImportFeatureService<TSimpleNameSyntax> provider,
         ConcurrentDictionary<Project, AsyncLazy<IAssemblySymbol?>> projectToAssembly,
         Project project, bool ignoreCase) : ProjectSearchScope(provider, project, ignoreCase)
@@ -48,11 +48,12 @@ internal abstract partial class AbstractAddImportFeatureService<TSimpleNameSynta
             return declarations;
 
             static AsyncLazy<IAssemblySymbol?> CreateLazyAssembly(Project project)
-                => new(async c =>
+                => AsyncLazy.Create(static async (project, c) =>
                        {
                            var compilation = await project.GetRequiredCompilationAsync(c).ConfigureAwait(false);
-                           return compilation.Assembly;
-                       });
+                           return (IAssemblySymbol?)compilation.Assembly;
+                       },
+                       arg: project);
         }
     }
 }

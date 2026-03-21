@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -9,8 +9,6 @@ using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.PatternMatching;
 using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Remote;
-using Microsoft.CodeAnalysis.Shared.Extensions;
-using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.FindSymbols;
 
@@ -186,7 +184,7 @@ internal static partial class DeclarationFinder
                 project, query, criteria, result, cancellationToken).ConfigureAwait(false);
         }
 
-        return result.ToImmutable();
+        return result.ToImmutableAndClear();
     }
 
     internal static async Task<ImmutableArray<ISymbol>> FindSourceDeclarationsWithNormalQueryInCurrentProcessAsync(
@@ -198,7 +196,7 @@ internal static partial class DeclarationFinder
         await AddCompilationSourceDeclarationsWithNormalQueryAsync(
             project, query, filter, result, cancellationToken).ConfigureAwait(false);
 
-        return result.ToImmutable();
+        return result.ToImmutableAndClear();
     }
 
     private static async Task<ImmutableArray<ISymbol>> FindSourceDeclarationsWithPatternInCurrentProcessAsync(
@@ -230,7 +228,7 @@ internal static partial class DeclarationFinder
 
         // Ok, we had a dotted pattern.  Have to see if the symbol's container matches the 
         // pattern as well.
-        using var containerPatternMatcher = PatternMatcher.CreateDotSeparatedContainerMatcher(containerPart);
+        using var containerPatternMatcher = PatternMatcher.CreateDotSeparatedContainerMatcher(containerPart, includeMatchedSpans: false);
 
         return symbolAndProjectIds.WhereAsArray(t =>
             containerPatternMatcher.Matches(GetContainer(t)));

@@ -354,10 +354,11 @@ namespace Microsoft.CodeAnalysis.CSharp
                 callReceiver = initializerExpr;
             }
 
+            // Tracked by https://github.com/dotnet/roslyn/issues/78827 : MQ, Consider preserving the BoundConversion from initial binding instead of using markAsChecked here
             // .GetPinnable()
             var getPinnableCall = getPinnableMethod.IsStatic ?
-                factory.Call(null, getPinnableMethod, callReceiver) :
-                factory.Call(callReceiver, getPinnableMethod);
+                factory.Call(null, getPinnableMethod, this.ConvertReceiverForExtensionIfNeeded(callReceiver, markAsChecked: true, getPinnableMethod.Parameters[0])) :
+                factory.Call(this.ConvertReceiverForExtensionMemberIfNeeded(getPinnableMethod, callReceiver, markAsChecked: true), getPinnableMethod);
 
             // temp =ref .GetPinnable()
             var tempAssignment = factory.AssignmentExpression(
@@ -473,7 +474,7 @@ namespace Microsoft.CodeAnalysis.CSharp
             BoundExpression notNullCheck = _factory.MakeNullCheck(factory.Syntax, factory.Local(localSymbol), BinaryOperatorKind.NotEqual);
             BoundExpression helperCall;
 
-            MethodSymbol offsetMethod;
+            MethodSymbol? offsetMethod;
             if (TryGetWellKnownTypeMember(fixedInitializer.Syntax, WellKnownMember.System_Runtime_CompilerServices_RuntimeHelpers__get_OffsetToStringData, out offsetMethod))
             {
                 helperCall = factory.Call(receiver: null, method: offsetMethod);
@@ -534,8 +535,8 @@ namespace Microsoft.CodeAnalysis.CSharp
             }
             else
             {
-                MethodSymbol lengthMethod;
-                if (TryGetWellKnownTypeMember(fixedInitializer.Syntax, WellKnownMember.System_Array__get_Length, out lengthMethod))
+                MethodSymbol? lengthMethod;
+                if (TryGetSpecialTypeMethod(fixedInitializer.Syntax, SpecialMember.System_Array__get_Length, out lengthMethod))
                 {
                     lengthCall = factory.Call(factory.Local(pinnedTemp), lengthMethod);
                 }

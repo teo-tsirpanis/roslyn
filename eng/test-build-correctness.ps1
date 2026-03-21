@@ -25,6 +25,7 @@ function Print-Usage() {
   Write-Host "  -configuration            Build configuration ('Debug' or 'Release')"
 }
 
+$docBranch = "main"
 try {
   if ($help) {
     Print-Usage
@@ -34,6 +35,12 @@ try {
   . (Join-Path $PSScriptRoot "build-utils.ps1")
   Push-Location $RepoRoot
   $prepareMachine = $ci
+
+  # If we're running in a PR, we want to use the documentation from the branch that is being 
+  # merged into, not necessarily the documentation in main
+  if (Test-Path env:SYSTEM_PULLREQUEST_TARGETBRANCH) {
+    $docBranch = $env:SYSTEM_PULLREQUEST_TARGETBRANCH
+  }
 
   if ($enableDumps) {
     $key = "HKLM:\\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps"
@@ -45,24 +52,26 @@ try {
 
   if ($bootstrapDir -eq "") {
     Write-Host "Building bootstrap compiler"
-    $bootstrapDir = Join-Path $ArtifactsDir "bootstrap" "correctness"
-    Exec-Script (Join-Path $PSScriptRoot "make-bootstrap.ps1") "-output $bootstrapDir -ci:$ci"
+    $bootstrapDir = Join-Path $ArtifactsDir (Join-Path "bootstrap" "correctness")
+    & eng/make-bootstrap.ps1 -output $bootstrapDir -ci:$ci
+    Test-LastExitCode
   }
 
   Write-Host "Building Roslyn"
-  Exec-Script (Join-Path $PSScriptRoot "build.ps1") "-restore -build -bootstrapDir:$bootstrapDir -ci:$true -prepareMachine:$true -runAnalyzers:$true -configuration:$configuration -pack -binaryLog -useGlobalNuGetCache:$false -warnAsError:$true -properties `"/p:RoslynEnforceCodeStyle=true`""
+  & eng/build.ps1 -restore -build -bootstrapDir:$bootstrapDir -ci:$ci -prepareMachine:$prepareMachine -runAnalyzers:$true -configuration:$configuration -pack -binaryLog -useGlobalNuGetCache:$false -warnAsError:$true -properties:"/p:RoslynEnforceCodeStyle=true"
+  Test-LastExitCode
 
   Subst-TempDir
 
   # Verify the state of our various build artifacts
   Write-Host "Running BuildBoss"
   $buildBossPath = GetProjectOutputBinary "BuildBoss.exe"
-  Exec-Command $buildBossPath "-r `"$RepoRoot/`" -c $configuration -p Roslyn.sln"
+  Exec-Command $buildBossPath "-r `"$RepoRoot/`" -c $configuration -p Roslyn.slnx"
   Write-Host ""
 
   # Verify the state of our generated syntax files
   Write-Host "Checking generated compiler files"
-  Exec-Script (Join-Path $PSScriptRoot "generate-compiler-code.ps1") "-test -configuration:$configuration"
+  Exec-DotNet "run --file eng/generate-compiler-code.cs -- -test -configuration $configuration"
   Exec-DotNet "tool run dotnet-format whitespace . --folder --include-generated --include src/Compilers/CSharp/Portable/Generated/ src/Compilers/VisualBasic/Portable/Generated/ src/ExpressionEvaluator/VisualBasic/Source/ResultProvider/Generated/ --verify-no-changes"
   Write-Host ""
 
@@ -72,7 +81,7 @@ catch {
   Write-Host $_
   Write-Host $_.Exception
   Write-Host $_.ScriptStackTrace
-  Write-Host "##vso[task.logissue type=error]How to investigate bootstrap failures: https://github.com/dotnet/roslyn/blob/main/docs/compilers/Bootstrap%20Builds.md#Investigating"
+  Write-Host "##vso[task.logissue type=error]How to investigate bootstrap failures: https://github.com/dotnet/roslyn/blob/$($docBranch)/docs/contributing/bootstrap-builds.md#Investigating"
   ExitWithExitCode 1
 }
 finally {

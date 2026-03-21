@@ -3,13 +3,15 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using Microsoft.CodeAnalysis.CSharp.Extensions.ContextQuery;
 using Microsoft.CodeAnalysis.CSharp.Utilities;
+using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp.Completion.KeywordRecommenders;
 
-internal class ReadOnlyKeywordRecommender : AbstractSyntacticSingleKeywordRecommender
+internal sealed class ReadOnlyKeywordRecommender() : AbstractSyntacticSingleKeywordRecommender(SyntaxKind.ReadOnlyKeyword)
 {
     private static readonly ISet<SyntaxKind> s_validMemberModifiers = new HashSet<SyntaxKind>(SyntaxFacts.EqualityComparer)
         {
@@ -20,11 +22,6 @@ internal class ReadOnlyKeywordRecommender : AbstractSyntacticSingleKeywordRecomm
             SyntaxKind.PrivateKeyword,
             SyntaxKind.StaticKeyword,
         };
-
-    public ReadOnlyKeywordRecommender()
-        : base(SyntaxKind.ReadOnlyKeyword)
-    {
-    }
 
     protected override bool IsValidContext(int position, CSharpSyntaxContext context, CancellationToken cancellationToken)
     {
@@ -50,8 +47,8 @@ internal class ReadOnlyKeywordRecommender : AbstractSyntacticSingleKeywordRecomm
 
     private static bool IsValidContextForType(CSharpSyntaxContext context, CancellationToken cancellationToken)
     {
-        return context.IsTypeDeclarationContext(validModifiers: SyntaxKindSet.AllTypeModifiers,
-            validTypeDeclarations: SyntaxKindSet.ClassInterfaceStructRecordTypeDeclarations, canBePartial: true, cancellationToken);
+        return context.IsTypeDeclarationContext(validModifiers: SyntaxKindSet.AllTypeModifiers.Except([SyntaxKind.ReadOnlyKeyword]).ToSet(),
+            validTypeDeclarations: SyntaxKindSet.ClassInterfaceStructRecordTypeDeclarations, canBePartial: false, cancellationToken);
     }
 
     private static bool IsStructAccessorContext(CSharpSyntaxContext context)

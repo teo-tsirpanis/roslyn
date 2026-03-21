@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -22,5 +21,6 @@ internal interface IRemoteLegacySolutionEventsAggregationService
     /// <param name="kind"><inheritdoc cref="WorkspaceChangeEventArgs.Kind"/></param>
     /// <param name="projectId"><inheritdoc cref="WorkspaceChangeEventArgs.ProjectId"/></param>
     /// <param name="documentId"><inheritdoc cref="WorkspaceChangeEventArgs.DocumentId"/></param>
-    ValueTask OnWorkspaceChangedAsync(Checksum oldSolutionChecksum, Checksum newSolutionChecksum, WorkspaceChangeKind kind, ProjectId? projectId, DocumentId? documentId, CancellationToken cancellationToken);
+    /// <param name="processSourceGeneratedDocuments">Whether a change to a project should result in source-generated documents being refreshed.</param>
+    ValueTask OnWorkspaceChangedAsync(Checksum oldSolutionChecksum, Checksum newSolutionChecksum, WorkspaceChangeKind kind, ProjectId? projectId, DocumentId? documentId, bool processSourceGeneratedDocuments, CancellationToken cancellationToken);
 }

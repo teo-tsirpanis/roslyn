@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Xml;
 using System.Xml.Serialization;
 
@@ -24,6 +25,7 @@ namespace IOperationGenerator
         public List<TreeType> Types;
     }
 
+    [DebuggerDisplay("{Name, nq}")]
     public class TreeType
     {
         [XmlAttribute]
@@ -31,6 +33,9 @@ namespace IOperationGenerator
 
         [XmlAttribute]
         public string Base;
+
+        [XmlAttribute]
+        public string? ExperimentalUrl;
 
         [XmlAttribute]
         public string? Namespace;
@@ -106,6 +111,9 @@ namespace IOperationGenerator
 
         [XmlAttribute]
         public string Type;
+
+        [XmlAttribute]
+        public string? ExperimentalUrl;
 
         [XmlAttribute(AttributeName = "New")]
         public string NewText;

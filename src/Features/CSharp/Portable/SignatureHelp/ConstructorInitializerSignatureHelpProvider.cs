@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Composition;
 using System.Linq;
 using System.Threading;
@@ -17,12 +18,11 @@ using Microsoft.CodeAnalysis.LanguageService;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.SignatureHelp;
 using Microsoft.CodeAnalysis.Text;
-using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp.SignatureHelp;
 
 [ExportSignatureHelpProvider("ConstructorInitializerSignatureHelpProvider", LanguageNames.CSharp), Shared]
-internal partial class ConstructorInitializerSignatureHelpProvider : AbstractCSharpSignatureHelpProvider
+internal sealed partial class ConstructorInitializerSignatureHelpProvider : AbstractCSharpSignatureHelpProvider
 {
     [ImportingConstructor]
     [Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
@@ -30,11 +30,9 @@ internal partial class ConstructorInitializerSignatureHelpProvider : AbstractCSh
     {
     }
 
-    public override bool IsTriggerCharacter(char ch)
-        => ch is '(' or ',';
+    public override ImmutableArray<char> TriggerCharacters => ['(', ','];
 
-    public override bool IsRetriggerCharacter(char ch)
-        => ch == ')';
+    public override ImmutableArray<char> RetriggerCharacters => [')'];
 
     private async Task<ConstructorInitializerSyntax?> TryGetConstructorInitializerAsync(
         Document document,
@@ -42,23 +40,14 @@ internal partial class ConstructorInitializerSignatureHelpProvider : AbstractCSh
         SignatureHelpTriggerReason triggerReason,
         CancellationToken cancellationToken)
     {
-        var root = await document.GetRequiredSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-        var syntaxFacts = document.GetRequiredLanguageService<ISyntaxFactsService>();
+        var initializer = await CommonSignatureHelpUtilities.TryGetSyntaxAsync<ConstructorInitializerSyntax>(
+            document, position, triggerReason, IsTriggerToken, IsArgumentListToken, cancellationToken).ConfigureAwait(false);
 
-        if (!CommonSignatureHelpUtilities.TryGetSyntax(
-                root, position, syntaxFacts, triggerReason, IsTriggerToken, IsArgumentListToken, cancellationToken, out ConstructorInitializerSyntax? initializer))
-        {
-            return null;
-        }
-
-        if (initializer.ArgumentList is null)
-            return null;
-
-        return initializer;
+        return initializer?.ArgumentList is null ? null : initializer;
     }
 
     private bool IsTriggerToken(SyntaxToken token)
-        => SignatureHelpUtilities.IsTriggerParenOrComma<ConstructorInitializerSyntax>(token, IsTriggerCharacter);
+        => SignatureHelpUtilities.IsTriggerParenOrComma<ConstructorInitializerSyntax>(token, TriggerCharacters);
 
     private static bool IsArgumentListToken(ConstructorInitializerSyntax expression, SyntaxToken token)
     {
@@ -67,7 +56,7 @@ internal partial class ConstructorInitializerSignatureHelpProvider : AbstractCSh
             token != expression.ArgumentList.CloseParenToken;
     }
 
-    protected override async Task<SignatureHelpItems?> GetItemsWorkerAsync(Document document, int position, SignatureHelpTriggerInfo triggerInfo, SignatureHelpOptions options, CancellationToken cancellationToken)
+    protected override async Task<SignatureHelpItems?> GetItemsWorkerAsync(Document document, int position, SignatureHelpTriggerInfo triggerInfo, MemberDisplayOptions options, CancellationToken cancellationToken)
     {
         var constructorInitializer = await TryGetConstructorInitializerAsync(
             document, position, triggerInfo.TriggerReason, cancellationToken).ConfigureAwait(false);
@@ -100,7 +89,7 @@ internal partial class ConstructorInitializerSignatureHelpProvider : AbstractCSh
         if (!constructors.Any())
             return null;
 
-        var (currentSymbol, parameterIndexOverride) = new LightweightOverloadResolution(semanticModel, position, constructorInitializer.ArgumentList.Arguments)
+        var (currentSymbol, parameterIndexOverride) = new CSharpLightweightOverloadResolution(semanticModel, constructorInitializer.ArgumentList.Arguments, position)
             .RefineOverloadAndPickParameter(semanticModel.GetSymbolInfo(constructorInitializer, cancellationToken), constructors);
 
         // present items and select
@@ -146,7 +135,7 @@ internal partial class ConstructorInitializerSignatureHelpProvider : AbstractCSh
             GetPreambleParts(constructor, semanticModel, position),
             GetSeparatorParts(),
             GetPostambleParts(),
-            constructor.Parameters.Select(p => Convert(p, semanticModel, position, documentationCommentFormattingService)).ToList());
+            [.. constructor.Parameters.Select(p => Convert(p, semanticModel, position, documentationCommentFormattingService))]);
         return item;
     }
 
@@ -155,17 +144,9 @@ internal partial class ConstructorInitializerSignatureHelpProvider : AbstractCSh
         SemanticModel semanticModel,
         int position)
     {
-        var result = new List<SymbolDisplayPart>();
-
-        result.AddRange(method.ContainingType.ToMinimalDisplayParts(semanticModel, position));
-        result.Add(Punctuation(SyntaxKind.OpenParenToken));
-
-        return result;
+        return [.. method.ContainingType.ToMinimalDisplayParts(semanticModel, position), Punctuation(SyntaxKind.OpenParenToken)];
     }
 
     private static IList<SymbolDisplayPart> GetPostambleParts()
-    {
-        return SpecializedCollections.SingletonList(
-            Punctuation(SyntaxKind.CloseParenToken));
-    }
+        => [Punctuation(SyntaxKind.CloseParenToken)];
 }

@@ -60,7 +60,7 @@ namespace Microsoft.CodeAnalysis.CSharp
             if (methodSymbol.OriginalDefinition is SynthesizedDelegateInvokeMethod invoke)
             {
                 // If synthesizing a delegate with `params` array, check that `ParamArrayAttribute` is available.
-                if (invoke.IsParams())
+                if (invoke.Parameters is [.., { IsParamsArray: true }])
                 {
                     Binder.AddUseSiteDiagnosticForSynthesizedAttribute(
                         Compilation,
@@ -102,6 +102,8 @@ namespace Microsoft.CodeAnalysis.CSharp
             }
 
             var resolution = ResolveDelegateOrFunctionPointerMethodGroup(_binder, source, methodSymbol, isFunctionPointer, callingConventionInfo, ref useSiteInfo);
+            Debug.Assert(!resolution.IsNonMethodExtensionMember(out _));
+
             var conversion = (resolution.IsEmpty || resolution.HasAnyErrors) ?
                 Conversion.NoConversion :
                 ToConversion(resolution.OverloadResolutionResult, resolution.MethodGroup, methodSymbol.ParameterCount);
@@ -170,7 +172,7 @@ namespace Microsoft.CodeAnalysis.CSharp
                 case CollectionExpressionTypeKind.ImplementsIEnumerable:
                 case CollectionExpressionTypeKind.CollectionBuilder:
                     {
-                        _binder.TryGetCollectionIterationType((Syntax.ExpressionSyntax)syntax, targetType, out elementTypeWithAnnotations);
+                        _binder.TryGetCollectionIterationType(syntax, targetType, out elementTypeWithAnnotations);
                         elementType = elementTypeWithAnnotations.Type;
                         if (elementType is null)
                         {
@@ -183,15 +185,19 @@ namespace Microsoft.CodeAnalysis.CSharp
             Debug.Assert(elementType is { });
             var elements = node.Elements;
 
+            MethodSymbol? constructor = null;
+            bool isExpanded = false;
+
             if (collectionTypeKind == CollectionExpressionTypeKind.ImplementsIEnumerable)
             {
-                if (!_binder.HasCollectionExpressionApplicableConstructor(syntax, targetType, BindingDiagnosticBag.Discarded))
+                if (!_binder.HasCollectionExpressionApplicableConstructor(
+                        node.WithElement, node.WithElement?.Syntax ?? syntax, targetType, out constructor, out isExpanded, BindingDiagnosticBag.Discarded))
                 {
                     return Conversion.NoConversion;
                 }
 
                 if (elements.Length > 0 &&
-                    !_binder.HasCollectionExpressionApplicableAddMethod(syntax, targetType, elementType, BindingDiagnosticBag.Discarded))
+                    !_binder.HasCollectionExpressionApplicableAddMethod(syntax, targetType, addMethods: out _, BindingDiagnosticBag.Discarded))
                 {
                     return Conversion.NoConversion;
                 }
@@ -210,7 +216,7 @@ namespace Microsoft.CodeAnalysis.CSharp
                 builder.Add(elementConversion);
             }
 
-            return Conversion.CreateCollectionExpressionConversion(collectionTypeKind, elementType, builder.ToImmutableAndFree());
+            return Conversion.CreateCollectionExpressionConversion(collectionTypeKind, elementType, constructor, isExpanded, builder.ToImmutableAndFree());
 
             Conversion convertElement(BoundNode element, TypeSymbol elementType, ref CompoundUseSiteInfo<AssemblySymbol> useSiteInfo)
             {
@@ -237,6 +243,18 @@ namespace Microsoft.CodeAnalysis.CSharp
                 targetType,
                 ref useSiteInfo);
         }
+
+        protected override Conversion AnalyzeImplicitUnionConversions(BoundExpression sourceExpression, TypeSymbol source, TypeSymbol target, ref CompoundUseSiteInfo<AssemblySymbol> useSiteInfo)
+        {
+            if (_binder.InParameterDefaultValue || _binder.InAttributeArgument)
+            {
+                // We don't consider when we're in default parameter values or attributes to avoid cycles. This is an error scenario,
+                // so we don't care if we accidentally miss a parameter being applicable.
+                return Conversion.NoConversion;
+            }
+
+            return base.AnalyzeImplicitUnionConversions(sourceExpression, source, target, ref useSiteInfo);
+        }
 #nullable disable
 
         /// <summary>
@@ -245,20 +263,25 @@ namespace Microsoft.CodeAnalysis.CSharp
         /// </summary>
         private static MethodGroupResolution ResolveDelegateOrFunctionPointerMethodGroup(Binder binder, BoundMethodGroup source, MethodSymbol delegateInvokeMethodOpt, bool isFunctionPointer, in CallingConventionInfo callingConventionInfo, ref CompoundUseSiteInfo<AssemblySymbol> useSiteInfo)
         {
+            MethodGroupResolution resolution;
             if ((object)delegateInvokeMethodOpt != null)
             {
                 var analyzedArguments = AnalyzedArguments.GetInstance();
                 GetDelegateOrFunctionPointerArguments(source.Syntax, analyzedArguments, delegateInvokeMethodOpt.Parameters, binder.Compilation);
-                var resolution = binder.ResolveMethodGroup(source, analyzedArguments, useSiteInfo: ref useSiteInfo, inferWithDynamic: true,
-                    isMethodGroupConversion: true, returnRefKind: delegateInvokeMethodOpt.RefKind, returnType: delegateInvokeMethodOpt.ReturnType,
-                    isFunctionPointerResolution: isFunctionPointer, callingConventionInfo: callingConventionInfo);
+                resolution = binder.ResolveMethodGroup(source, analyzedArguments, useSiteInfo: ref useSiteInfo,
+                    options: OverloadResolution.Options.InferWithDynamic | OverloadResolution.Options.IsMethodGroupConversion |
+                             (isFunctionPointer ? OverloadResolution.Options.IsFunctionPointerResolution : OverloadResolution.Options.None),
+                    acceptOnlyMethods: true, returnRefKind: delegateInvokeMethodOpt.RefKind, returnType: delegateInvokeMethodOpt.ReturnType,
+                    callingConventionInfo: callingConventionInfo);
                 analyzedArguments.Free();
-                return resolution;
             }
             else
             {
-                return binder.ResolveMethodGroup(source, analyzedArguments: null, isMethodGroupConversion: true, ref useSiteInfo);
+                resolution = binder.ResolveMethodGroup(source, analyzedArguments: null, useSiteInfo: ref useSiteInfo, options: OverloadResolution.Options.IsMethodGroupConversion, acceptOnlyMethods: true);
             }
+
+            Debug.Assert(!resolution.IsNonMethodExtensionMember(out _));
+            return resolution;
         }
 
         /// <summary>
@@ -320,10 +343,24 @@ namespace Microsoft.CodeAnalysis.CSharp
                         Debug.Assert((object)method != null);
                         if (resolution.MethodGroup.IsExtensionMethodGroup)
                         {
-                            Debug.Assert(method.IsExtensionMethod);
+                            Debug.Assert(method.IsExtensionMethod || method.IsExtensionBlockMember());
 
-                            var thisParameter = method.Parameters[0];
-                            if (!thisParameter.Type.IsReferenceType)
+                            ParameterSymbol thisParameter;
+
+                            if (method.IsExtensionMethod)
+                            {
+                                thisParameter = method.Parameters[0];
+                            }
+                            else if (method.IsStatic)
+                            {
+                                thisParameter = null;
+                            }
+                            else
+                            {
+                                thisParameter = method.ContainingType.ExtensionParameter;
+                            }
+
+                            if (thisParameter?.Type.IsReferenceType == false)
                             {
                                 // Extension method '{0}' defined on value type '{1}' cannot be used to create delegates
                                 diagnostics.Add(
@@ -384,7 +421,7 @@ namespace Microsoft.CodeAnalysis.CSharp
                 arguments: analyzedArguments,
                 result: result,
                 useSiteInfo: ref useSiteInfo,
-                isMethodGroupConversion: true,
+                options: OverloadResolution.Options.IsMethodGroupConversion,
                 returnRefKind: delegateInvokeMethod.RefKind,
                 returnType: delegateInvokeMethod.ReturnType);
             var conversion = ToConversion(result, methodGroup, delegateType.DelegateInvokeMethod.ParameterCount);
@@ -410,7 +447,8 @@ namespace Microsoft.CodeAnalysis.CSharp
                     // If we don't have System.Object, then we'll get an error type, which will cause overload resolution to fail, 
                     // which will cause some error to be reported.  That's sufficient (i.e. no need to specifically report its absence here).
                     parameter = new SignatureOnlyParameterSymbol(
-                        TypeWithAnnotations.Create(compilation.GetSpecialType(SpecialType.System_Object), customModifiers: parameter.TypeWithAnnotations.CustomModifiers), parameter.RefCustomModifiers, parameter.IsParams, parameter.RefKind);
+                        TypeWithAnnotations.Create(compilation.GetSpecialType(SpecialType.System_Object), customModifiers: parameter.TypeWithAnnotations.CustomModifiers), parameter.RefCustomModifiers,
+                                                   isParamsArray: parameter.IsParamsArray, isParamsCollection: parameter.IsParamsCollection, parameter.RefKind);
                 }
 
                 analyzedArguments.Arguments.Add(new BoundParameter(syntax, parameter) { WasCompilerGenerated = true });
@@ -443,9 +481,12 @@ namespace Microsoft.CodeAnalysis.CSharp
 
             MethodSymbol method = result.BestResult.Member;
 
-            if (methodGroup.IsExtensionMethodGroup && !method.Parameters[0].Type.IsReferenceType)
+            if (methodGroup.IsExtensionMethodGroup)
             {
-                return Conversion.NoConversion;
+                if (!(method.IsExtensionBlockMember() && method.IsStatic) && !Binder.GetReceiverParameter(method).Type.IsReferenceType)
+                {
+                    return Conversion.NoConversion;
+                }
             }
 
             //cannot capture stack-only types.
@@ -470,9 +511,10 @@ namespace Microsoft.CodeAnalysis.CSharp
 
             // NOTE: Delegate type compatibility is important, but is not part of the existence check.
 
-            Debug.Assert(method.ParameterCount == parameterCount + (methodGroup.IsExtensionMethodGroup ? 1 : 0));
+            bool isExtensionMethod = methodGroup.IsExtensionMethodGroup && !method.IsExtensionBlockMember();
+            Debug.Assert(method.ParameterCount == parameterCount + (isExtensionMethod ? 1 : 0));
 
-            return new Conversion(ConversionKind.MethodGroup, method, methodGroup.IsExtensionMethodGroup);
+            return new Conversion(ConversionKind.MethodGroup, method, isExtensionMethod: isExtensionMethod);
         }
 
         public override Conversion GetStackAllocConversion(BoundStackAllocArrayCreation sourceExpression, TypeSymbol destination, ref CompoundUseSiteInfo<AssemblySymbol> useSiteInfo)

@@ -2,12 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System.Collections.Generic;
 using System.Collections.Immutable;
-using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Host;
@@ -27,7 +24,7 @@ internal static partial class ITypeSymbolExtensions
     /// interfaceMember, or this type doesn't supply a member that successfully implements
     /// interfaceMember).
     /// </summary>
-    public static async Task<ImmutableArray<ISymbol>> FindImplementationsForInterfaceMemberAsync(
+    public static ImmutableArray<ISymbol> FindImplementationsForInterfaceMember(
         this ITypeSymbol typeSymbol,
         ISymbol interfaceMember,
         Solution solution,
@@ -97,13 +94,11 @@ internal static partial class ITypeSymbolExtensions
             // OriginalSymbolMatch allows types to be matched across different assemblies if they are considered to
             // be the same type, which provides a more accurate implementations list for interfaces.
             var constructedInterfaceMember =
-                await constructedInterface.GetMembers(interfaceMember.Name).FirstOrDefaultAsync(
-                    typeSymbol => SymbolFinder.OriginalSymbolsMatchAsync(solution, typeSymbol, interfaceMember, cancellationToken)).ConfigureAwait(false);
+                constructedInterface.GetMembers(interfaceMember.Name).FirstOrDefault(
+                    typeSymbol => SymbolFinder.OriginalSymbolsMatch(solution, typeSymbol, interfaceMember));
 
             if (constructedInterfaceMember == null)
-            {
                 continue;
-            }
 
             // Now we need to walk the base type chain, but we start at the first type that actually
             // has the interface directly in its interface hierarchy.
@@ -126,7 +121,7 @@ internal static partial class ITypeSymbolExtensions
             }
         }
 
-        return builder.ToImmutable();
+        return builder.ToImmutableAndClear();
     }
 
     public static ISymbol? FindImplementations(this ITypeSymbol typeSymbol, ISymbol constructedInterfaceMember, SolutionServices services)
@@ -177,81 +172,21 @@ internal static partial class ITypeSymbolExtensions
         return explicitMatches.FirstOrDefault() ?? implicitMatches.FirstOrDefault();
     }
 
-    [return: NotNullIfNotNull(parameterName: nameof(type))]
-    public static ITypeSymbol? RemoveUnavailableTypeParameters(
-        this ITypeSymbol? type,
-        Compilation compilation,
-        IEnumerable<ITypeParameterSymbol> availableTypeParameters)
-    {
-        return type?.RemoveUnavailableTypeParameters(compilation, availableTypeParameters.Select(t => t.Name).ToSet());
-    }
-
-    [return: NotNullIfNotNull(parameterName: nameof(type))]
-    private static ITypeSymbol? RemoveUnavailableTypeParameters(
-        this ITypeSymbol? type,
-        Compilation compilation,
-        ISet<string> availableTypeParameterNames)
-    {
-        return type?.Accept(new UnavailableTypeParameterRemover(compilation, availableTypeParameterNames));
-    }
-
-    [return: NotNullIfNotNull(parameterName: nameof(type))]
-    public static ITypeSymbol? RemoveAnonymousTypes(
-        this ITypeSymbol? type,
-        Compilation compilation)
-    {
-        return type?.Accept(new AnonymousTypeRemover(compilation));
-    }
-
-    [return: NotNullIfNotNull(parameterName: nameof(type))]
-    public static ITypeSymbol? RemoveUnnamedErrorTypes(
-        this ITypeSymbol? type,
-        Compilation compilation)
-    {
-        return type?.Accept(new UnnamedErrorTypeRemover(compilation));
-    }
-
-    [return: NotNullIfNotNull(parameterName: nameof(type))]
-    public static ITypeSymbol? SubstituteTypes<TType1, TType2>(
-        this ITypeSymbol? type,
-        IDictionary<TType1, TType2> mapping,
-        Compilation compilation)
-        where TType1 : ITypeSymbol
-        where TType2 : ITypeSymbol
-    {
-        return type.SubstituteTypes(mapping, new CompilationTypeGenerator(compilation));
-    }
-
-    [return: NotNullIfNotNull(parameterName: nameof(type))]
-    public static ITypeSymbol? SubstituteTypes<TType1, TType2>(
-        this ITypeSymbol? type,
-        IDictionary<TType1, TType2> mapping,
-        ITypeGenerator typeGenerator)
-        where TType1 : ITypeSymbol
-        where TType2 : ITypeSymbol
-    {
-        return type?.Accept(new SubstituteTypesVisitor<TType1, TType2>(mapping, typeGenerator));
-    }
-
     public static bool CanBeEnumerated(this ITypeSymbol type)
     {
         // Type itself is IEnumerable/IEnumerable<SomeType>
-        if (type.OriginalDefinition is { SpecialType: SpecialType.System_Collections_Generic_IEnumerable_T or SpecialType.System_Collections_IEnumerable })
-        {
-            return true;
-        }
-
-        return type.AllInterfaces.Any(s => s.SpecialType is SpecialType.System_Collections_Generic_IEnumerable_T or SpecialType.System_Collections_IEnumerable);
+        return type.OriginalDefinition is { SpecialType: SpecialType.System_Collections_Generic_IEnumerable_T or SpecialType.System_Collections_IEnumerable } ||
+            type.AllInterfaces.Any(s => s.SpecialType is SpecialType.System_Collections_Generic_IEnumerable_T or SpecialType.System_Collections_IEnumerable);
     }
 
     public static bool CanBeAsynchronouslyEnumerated(this ITypeSymbol type, Compilation compilation)
-    {
-        var asyncEnumerableType = compilation.IAsyncEnumerableOfTType();
+        => type.CanBeAsynchronouslyEnumerated(compilation.IAsyncEnumerableOfTType());
 
+    public static bool CanBeAsynchronouslyEnumerated(this ITypeSymbol type, INamedTypeSymbol? asyncEnumerableType)
+    {
+        asyncEnumerableType = asyncEnumerableType?.OriginalDefinition;
         if (asyncEnumerableType is null)
-        {
             return false;
-        }
 
         // Type itself is an IAsyncEnumerable<SomeType>
         if (type.TypeKind == TypeKind.Interface &&
@@ -263,9 +198,7 @@ internal static partial class ITypeSymbolExtensions
         foreach (var @interface in type.AllInterfaces)
         {
             if (@interface.OriginalDefinition.Equals(asyncEnumerableType, SymbolEqualityComparer.Default))
-            {
                 return true;
-            }
         }
 
         return false;

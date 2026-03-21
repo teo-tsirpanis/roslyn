@@ -8,7 +8,7 @@
     <ProjectReference Include="..\..\..\..\Compilers\VisualBasic\vbc\AnyCpu\vbc.csproj" PrivateAssets="All"/>
     <ProjectReference Include="..\..\..\..\Compilers\VisualBasic\vbc\arm64\vbc-arm64.csproj" PrivateAssets="All"/>
     <ProjectReference Include="..\..\..\..\Interactive\csi\csi.csproj" PrivateAssets="All"/>
-    <ProjectReference Include="..\..\..\..\Compilers\Core\MSBuildTask\Microsoft.Build.Tasks.CodeAnalysis.csproj" PrivateAssets="All"/>
+    <ProjectReference Include="..\..\..\..\Compilers\Core\MSBuildTask\MSBuild\Microsoft.Build.Tasks.CodeAnalysis.csproj" PrivateAssets="All"/>
     <ProjectReference Include="..\..\..\..\Compilers\Server\VBCSCompiler\AnyCpu\VBCSCompiler.csproj" PrivateAssets="All"/>
     <ProjectReference Include="..\..\..\..\Compilers\Server\VBCSCompiler\arm64\VBCSCompiler-arm64.csproj" PrivateAssets="All"/>
   </ItemGroup>
@@ -42,13 +42,12 @@
     </Copy>
   </Target>
 
-  <!-- TODO: https://github.com/dotnet/source-build/issues/3981 for where this should be excluded in vertical modes. -->
   <Target Name="_GenerateSwrFile"
           AfterTargets="Build"
           BeforeTargets="SwixBuild"
           DependsOnTargets="_SetSwrFilePath;InitializeDesktopCompilerArtifacts;_PrepareDesktopCompilerArtifactsForOptimization;ApplyOptimizations"
           Outputs="$(_SwrFilePath)"
-          Condition="'$(DotNetBuildFromSource)' != 'true' and '$(DotNetBuildVertical)' != 'true'">
+          Condition="'$(DotNetBuildSourceOnly)' != 'true'">
 
     <ItemGroup>
       <_File Include="@(DesktopCompilerArtifact)">

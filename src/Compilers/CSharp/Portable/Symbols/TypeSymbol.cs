@@ -490,13 +490,15 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         /// <remarks>
         /// Not preserved in types constructed from this one.
         /// </remarks>
-        public virtual SpecialType SpecialType
+        public virtual ExtendedSpecialType ExtendedSpecialType
         {
             get
             {
-                return SpecialType.None;
+                return default;
             }
         }
+
+        public SpecialType SpecialType => (SpecialType)ExtendedSpecialType;
 
         /// <summary>
         /// Gets corresponding primitive type code for this type declaration.
@@ -588,7 +590,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
 #nullable enable
         /// <summary>
-        /// Is this type a managed type (false for everything but enum, pointer, and
+        /// Is this type a managed type (true for everything but enum, pointer, and
         /// some struct types).
         /// </summary>
         /// <remarks>
@@ -657,6 +659,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         /// Returns true if the type is a readonly struct
         /// </summary>
         public abstract bool IsReadOnly { get; }
+
+        internal sealed override CallerUnsafeMode CallerUnsafeMode => CallerUnsafeMode.None;
 
         public string ToDisplayString(CodeAnalysis.NullableFlowState topLevelNullability, SymbolDisplayFormat format = null)
         {
@@ -938,10 +942,16 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
             bool tryDefaultInterfaceImplementation = true;
 
+            if (implementingTypeIsFromSomeCompilation && implicitImpl is MethodSymbol implicitImplMethod && implicitImplMethod.IsOperator() != ((MethodSymbol)interfaceMember).IsOperator())
+            {
+                closestMismatch = implicitImpl;
+                implicitImpl = null;
+                tryDefaultInterfaceImplementation = false;
+            }
             // Dev10 has some extra restrictions and extra wiggle room when finding implicit
             // implementations for interface accessors.  Perform some extra checks and possibly
             // update the result (i.e. implicitImpl).
-            if (interfaceMember.IsAccessor())
+            else if (interfaceMember.IsAccessor())
             {
                 Symbol originalImplicitImpl = implicitImpl;
                 CheckForImplementationOfCorrespondingPropertyOrEvent((MethodSymbol)interfaceMember, implementingType, implementingTypeIsFromSomeCompilation, ref implicitImpl);
@@ -1618,34 +1628,44 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
         private static void ReportDefaultInterfaceImplementationMatchDiagnostics(Symbol interfaceMember, TypeSymbol implementingType, Symbol implicitImpl, BindingDiagnosticBag diagnostics)
         {
-            if (interfaceMember.Kind == SymbolKind.Method && implementingType.ContainingModule != implicitImpl.ContainingModule)
+            if (interfaceMember.Kind == SymbolKind.Method)
             {
-                // The default implementation is coming from a different module, which means that we probably didn't check
-                // for the required runtime capability or language version
                 bool isStatic = implicitImpl.IsStatic;
-                var feature = isStatic ? MessageID.IDS_FeatureStaticAbstractMembersInInterfaces : MessageID.IDS_DefaultInterfaceImplementation;
 
-                LanguageVersion requiredVersion = feature.RequiredVersion();
-                LanguageVersion? availableVersion = implementingType.DeclaringCompilation?.LanguageVersion;
-                if (requiredVersion > availableVersion)
+                if (!isStatic && implementingType.IsRefLikeType)
                 {
-                    diagnostics.Add(ErrorCode.ERR_LanguageVersionDoesNotSupportInterfaceImplementationForMember,
-                                    GetInterfaceLocation(interfaceMember, implementingType),
-                                    implicitImpl, interfaceMember, implementingType,
-                                    feature.Localize(),
-                                    availableVersion.GetValueOrDefault().ToDisplayString(),
-                                    new CSharpRequiredLanguageVersion(requiredVersion));
-                }
-
-                if (!(isStatic ?
-                          implementingType.ContainingAssembly.RuntimeSupportsStaticAbstractMembersInInterfaces :
-                          implementingType.ContainingAssembly.RuntimeSupportsDefaultInterfaceImplementation))
-                {
-                    diagnostics.Add(isStatic ?
-                                        ErrorCode.ERR_RuntimeDoesNotSupportStaticAbstractMembersInInterfacesForMember :
-                                        ErrorCode.ERR_RuntimeDoesNotSupportDefaultInterfaceImplementationForMember,
+                    diagnostics.Add(ErrorCode.ERR_RefStructDoesNotSupportDefaultInterfaceImplementationForMember,
                                     GetInterfaceLocation(interfaceMember, implementingType),
                                     implicitImpl, interfaceMember, implementingType);
+                }
+                else if (implementingType.ContainingModule != implicitImpl.ContainingModule)
+                {
+                    // The default implementation is coming from a different module, which means that we probably didn't check
+                    // for the required runtime capability or language version
+                    var feature = isStatic ? MessageID.IDS_FeatureStaticAbstractMembersInInterfaces : MessageID.IDS_DefaultInterfaceImplementation;
+
+                    LanguageVersion requiredVersion = feature.RequiredVersion();
+                    LanguageVersion? availableVersion = implementingType.DeclaringCompilation?.LanguageVersion;
+                    if (requiredVersion > availableVersion)
+                    {
+                        diagnostics.Add(ErrorCode.ERR_LanguageVersionDoesNotSupportInterfaceImplementationForMember,
+                                        GetInterfaceLocation(interfaceMember, implementingType),
+                                        implicitImpl, interfaceMember, implementingType,
+                                        feature.Localize(),
+                                        availableVersion.GetValueOrDefault().ToDisplayString(),
+                                        new CSharpRequiredLanguageVersion(requiredVersion));
+                    }
+
+                    if (!(isStatic ?
+                              implementingType.ContainingAssembly.RuntimeSupportsStaticAbstractMembersInInterfaces :
+                              implementingType.ContainingAssembly.RuntimeSupportsDefaultInterfaceImplementation))
+                    {
+                        diagnostics.Add(isStatic ?
+                                            ErrorCode.ERR_RuntimeDoesNotSupportStaticAbstractMembersInInterfacesForMember :
+                                            ErrorCode.ERR_RuntimeDoesNotSupportDefaultInterfaceImplementationForMember,
+                                        GetInterfaceLocation(interfaceMember, implementingType),
+                                        implicitImpl, interfaceMember, implementingType);
+                    }
                 }
             }
         }
@@ -1776,6 +1796,14 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                                                                                         }
                                                                                     },
                                                                                     (implementingType, isExplicit));
+
+                    SourceMemberContainerTypeSymbol.CheckCallerUnsafeMismatch(
+                        implementedEvent,
+                        implementingEvent,
+                        isExplicit ? ErrorCode.ERR_CallerUnsafeExplicitlyImplementingSafe : ErrorCode.ERR_CallerUnsafeImplicitlyImplementingSafe,
+                        (implementedEvent, implementingType, implementingEvent),
+                        static arg => GetImplicitImplementationDiagnosticLocation(arg.implementedEvent, arg.implementingType, arg.implementingEvent),
+                        diagnostics);
                 }
                 else
                 {
@@ -1784,8 +1812,6 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                         MethodSymbol implementedMethod,
                         MethodSymbol implementingMethod,
                         bool isExplicit,
-                        bool checkReturnType,
-                        bool checkParameterTypes,
                         BindingDiagnosticBag diagnostics)
                     {
                         ReportMismatchInReturnType<(TypeSymbol implementingType, bool isExplicit)> reportMismatchInReturnType =
@@ -1841,12 +1867,11 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                             implementedMethod,
                             implementingMethod,
                             diagnostics,
-                            checkReturnType ? reportMismatchInReturnType : null,
-                            checkParameterTypes ? reportMismatchInParameterType : null,
+                            reportMismatchInReturnType,
+                            reportMismatchInParameterType,
                             (implementingType, isExplicit));
 
-                        if (checkParameterTypes &&
-                            SourceMemberContainerTypeSymbol.RequiresValidScopedOverrideForRefSafety(implementedMethod))
+                        if (SourceMemberContainerTypeSymbol.RequiresValidScopedOverrideForRefSafety(implementedMethod, implementingMethod.TryGetThisParameter(out var thisParameter) ? thisParameter : null))
                         {
                             SourceMemberContainerTypeSymbol.CheckValidScopedOverride(
                                 implementedMethod,
@@ -1866,26 +1891,43 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                                 invokedAsExtensionMethod: false);
                         }
 
-                        if (checkParameterTypes)
-                        {
-                            SourceMemberContainerTypeSymbol.CheckRefReadonlyInMismatch(
-                                implementedMethod, implementingMethod, diagnostics,
-                                static (diagnostics, implementedMethod, implementingMethod, implementingParameter, _, arg) =>
-                                {
-                                    var (implementedParameter, implementingType) = arg;
-                                    var location = GetImplicitImplementationDiagnosticLocation(implementedMethod, implementingType, implementingMethod);
-                                    // Reference kind modifier of parameter '{0}' doesn't match the corresponding parameter '{1}' in overridden or implemented member.
-                                    diagnostics.Add(ErrorCode.WRN_OverridingDifferentRefness, location, implementingParameter, implementedParameter);
-                                },
-                                implementingType,
-                                invokedAsExtensionMethod: false);
-                        }
+                        SourceMemberContainerTypeSymbol.CheckRefReadonlyInMismatch(
+                            implementedMethod, implementingMethod, diagnostics,
+                            static (diagnostics, implementedMethod, implementingMethod, implementingParameter, _, arg) =>
+                            {
+                                var (implementedParameter, implementingType) = arg;
+                                var location = GetImplicitImplementationDiagnosticLocation(implementedMethod, implementingType, implementingMethod);
+                                // Reference kind modifier of parameter '{0}' doesn't match the corresponding parameter '{1}' in overridden or implemented member.
+                                diagnostics.Add(ErrorCode.WRN_OverridingDifferentRefness, location, implementingParameter, implementedParameter);
+                            },
+                            implementingType,
+                            invokedAsExtensionMethod: false);
+
+                        SourceMemberContainerTypeSymbol.CheckCallerUnsafeMismatch(
+                            implementedMethod,
+                            implementingMethod,
+                            isExplicit ? ErrorCode.ERR_CallerUnsafeExplicitlyImplementingSafe : ErrorCode.ERR_CallerUnsafeImplicitlyImplementingSafe,
+                            (implementedMethod, implementingType, implementingMethod),
+                            static arg => GetImplicitImplementationDiagnosticLocation(arg.implementedMethod, arg.implementingType, arg.implementingMethod),
+                            diagnostics);
 
                         if (implementingMethod.HasUnscopedRefAttributeOnMethodOrProperty())
                         {
-                            diagnostics.Add(
-                                ErrorCode.ERR_UnscopedRefAttributeInterfaceImplementation,
-                                GetImplicitImplementationDiagnosticLocation(implementedMethod, implementingType, implementingMethod));
+                            if (implementedMethod.HasUnscopedRefAttributeOnMethodOrProperty())
+                            {
+                                if (!implementingMethod.IsExplicitInterfaceImplementation && implementingMethod is SourceMethodSymbol &&
+                                    implementedMethod.ContainingModule != implementingMethod.ContainingModule)
+                                {
+                                    checkRefStructInterfacesFeatureAvailabilityOnUnscopedRefAttribute(implementingMethod.HasUnscopedRefAttribute ? implementingMethod : implementingMethod.AssociatedSymbol, diagnostics);
+                                }
+                            }
+                            else
+                            {
+                                diagnostics.Add(
+                                    ErrorCode.ERR_UnscopedRefAttributeInterfaceImplementation,
+                                    GetImplicitImplementationDiagnosticLocation(implementedMethod, implementingType, implementingMethod),
+                                    implementedMethod);
+                            }
                         }
                     }
 
@@ -1907,10 +1949,6 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                                     implementedProperty.GetMethod,
                                     implementingGetMethod,
                                     isExplicit: isExplicit,
-                                    checkReturnType: true,
-                                    // Don't check parameters on the getter if there is a setter
-                                    // because they will be a subset of the setter
-                                    checkParameterTypes: implementingGetMethod?.AssociatedSymbol != implementingProperty || implementingSetMethod?.AssociatedSymbol != implementingProperty,
                                     diagnostics);
                             }
 
@@ -1921,8 +1959,6 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                                     implementedProperty.SetMethod,
                                     implementingSetMethod,
                                     isExplicit: isExplicit,
-                                    checkReturnType: false,
-                                    checkParameterTypes: true,
                                     diagnostics);
                             }
                             break;
@@ -1940,14 +1976,27 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                                 implementedMethod,
                                 implementingMethod,
                                 isExplicit: isExplicit,
-                                checkReturnType: true,
-                                checkParameterTypes: true,
                                 diagnostics);
                             break;
                         default:
                             throw ExceptionUtilities.UnexpectedValue(interfaceMember.Kind);
                     }
                 }
+            }
+
+            static void checkRefStructInterfacesFeatureAvailabilityOnUnscopedRefAttribute(Symbol implementingSymbol, BindingDiagnosticBag diagnostics)
+            {
+                foreach (var attributeData in implementingSymbol.GetAttributes())
+                {
+                    if (attributeData is SourceAttributeData { ApplicationSyntaxReference: { } applicationSyntaxReference } &&
+                        attributeData.IsTargetAttribute(AttributeDescription.UnscopedRefAttribute))
+                    {
+                        MessageID.IDS_FeatureRefStructInterfaces.CheckFeatureAvailability(diagnostics, implementingSymbol.DeclaringCompilation, applicationSyntaxReference.GetLocation());
+                        return;
+                    }
+                }
+
+                Debug.Assert(false);
             }
         }
 
@@ -2019,6 +2068,11 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 {
                     diagnostics.Add(ErrorCode.ERR_CloseUnimplementedInterfaceMemberWrongRefReturn, interfaceLocation, implementingType, interfaceMember, closestMismatch);
                 }
+                else if (interfaceMember is MethodSymbol interfaceMethod &&
+                         interfaceMethod.IsOperator() != ((MethodSymbol)closestMismatch).IsOperator())
+                {
+                    diagnostics.Add(ErrorCode.ERR_CloseUnimplementedInterfaceMemberOperatorMismatch, interfaceLocation, implementingType, interfaceMember, closestMismatch);
+                }
                 else
                 {
                     diagnostics.Add(ErrorCode.ERR_CloseUnimplementedInterfaceMemberWrongReturnType, interfaceLocation, implementingType, interfaceMember, closestMismatch, interfaceMemberReturnType);
@@ -2075,12 +2129,13 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                 var typeMap2 = new TypeMap(typeParameters2, indexedTypeParameters, allowAlpha: true);
 
                 // Report any mismatched method constraints.
+                const TypeCompareKind compareKind = TypeCompareKind.IgnoreDynamicAndTupleNames | TypeCompareKind.IgnoreNullableModifiersForReferenceTypes;
                 for (int i = 0; i < arity; i++)
                 {
                     var typeParameter1 = typeParameters1[i];
                     var typeParameter2 = typeParameters2[i];
 
-                    if (!MemberSignatureComparer.HaveSameConstraints(typeParameter1, typeMap1, typeParameter2, typeMap2))
+                    if (!MemberSignatureComparer.HaveSameConstraints(typeParameter1, typeMap1, typeParameter2, typeMap2, compareKind))
                     {
                         // If the matching method for the interface member is defined on the implementing type,
                         // the matching method location is used for the error. Otherwise, the location of the
@@ -2144,7 +2199,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
             bool? isOperator = null;
 
-            if (interfaceMember is MethodSymbol interfaceMethod)
+            if (interfaceMember is MethodSymbol { IsStatic: true } interfaceMethod)
             {
                 isOperator = interfaceMethod.MethodKind is MethodKind.UserDefinedOperator or MethodKind.Conversion;
             }
@@ -2471,6 +2526,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         TypeKind ITypeSymbolInternal.TypeKind => this.TypeKind;
 
         SpecialType ITypeSymbolInternal.SpecialType => this.SpecialType;
+
+        ExtendedSpecialType ITypeSymbolInternal.ExtendedSpecialType => this.ExtendedSpecialType;
 
         bool ITypeSymbolInternal.IsReferenceType => this.IsReferenceType;
 

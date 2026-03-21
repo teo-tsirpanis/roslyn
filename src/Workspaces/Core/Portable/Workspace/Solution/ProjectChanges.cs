@@ -3,116 +3,60 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace Microsoft.CodeAnalysis;
 
 public readonly struct ProjectChanges
 {
-    private readonly Project _newProject;
-    private readonly Project _oldProject;
-
     internal ProjectChanges(Project newProject, Project oldProject)
     {
-        _newProject = newProject;
-        _oldProject = oldProject;
+        NewProject = newProject;
+        OldProject = oldProject;
     }
 
-    public ProjectId ProjectId => _newProject.Id;
+    public ProjectId ProjectId => NewProject.Id;
 
-    public Project OldProject => _oldProject;
+    public Project OldProject { get; }
 
-    public Project NewProject => _newProject;
+    public Project NewProject { get; }
 
     public IEnumerable<ProjectReference> GetAddedProjectReferences()
-    {
-        var oldRefs = new HashSet<ProjectReference>(_oldProject.ProjectReferences);
-        foreach (var reference in _newProject.ProjectReferences)
-        {
-            if (!oldRefs.Contains(reference))
-            {
-                yield return reference;
-            }
-        }
-    }
+        => GetChangedProjectReferences(NewProject, OldProject);
 
     public IEnumerable<ProjectReference> GetRemovedProjectReferences()
-    {
-        var newRefs = new HashSet<ProjectReference>(_newProject.ProjectReferences);
-        foreach (var reference in _oldProject.ProjectReferences)
-        {
-            if (!newRefs.Contains(reference))
-            {
-                yield return reference;
-            }
-        }
-    }
+        => GetChangedProjectReferences(OldProject, NewProject);
 
     public IEnumerable<MetadataReference> GetAddedMetadataReferences()
-    {
-        var oldMetadata = new HashSet<MetadataReference>(_oldProject.MetadataReferences);
-        foreach (var metadata in _newProject.MetadataReferences)
-        {
-            if (!oldMetadata.Contains(metadata))
-            {
-                yield return metadata;
-            }
-        }
-    }
+        => GetChangedItems(NewProject.MetadataReferences, OldProject.MetadataReferences);
 
     public IEnumerable<MetadataReference> GetRemovedMetadataReferences()
-    {
-        var newMetadata = new HashSet<MetadataReference>(_newProject.MetadataReferences);
-        foreach (var metadata in _oldProject.MetadataReferences)
-        {
-            if (!newMetadata.Contains(metadata))
-            {
-                yield return metadata;
-            }
-        }
-    }
+        => GetChangedItems(OldProject.MetadataReferences, NewProject.MetadataReferences);
 
     public IEnumerable<AnalyzerReference> GetAddedAnalyzerReferences()
-    {
-        var oldAnalyzerReferences = new HashSet<AnalyzerReference>(_oldProject.AnalyzerReferences);
-        foreach (var analyzerReference in _newProject.AnalyzerReferences)
-        {
-            if (!oldAnalyzerReferences.Contains(analyzerReference))
-            {
-                yield return analyzerReference;
-            }
-        }
-    }
+        => GetChangedItems(NewProject.AnalyzerReferences, OldProject.AnalyzerReferences);
 
     public IEnumerable<AnalyzerReference> GetRemovedAnalyzerReferences()
-    {
-        var newAnalyzerReferences = new HashSet<AnalyzerReference>(_newProject.AnalyzerReferences);
-        foreach (var analyzerReference in _oldProject.AnalyzerReferences)
-        {
-            if (!newAnalyzerReferences.Contains(analyzerReference))
-            {
-                yield return analyzerReference;
-            }
-        }
-    }
+        => GetChangedItems(OldProject.AnalyzerReferences, NewProject.AnalyzerReferences);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of added documents in the order they appear in <see cref="Project.DocumentIds"/> of the <see cref="NewProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetAddedDocuments()
-        => _newProject.State.DocumentStates.GetAddedStateIds(_oldProject.State.DocumentStates);
+        => NewProject.State.DocumentStates.GetAddedStateIds(OldProject.State.DocumentStates);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of added dditional documents in the order they appear in <see cref="Project.DocumentIds"/> of <see cref="NewProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetAddedAdditionalDocuments()
-        => _newProject.State.AdditionalDocumentStates.GetAddedStateIds(_oldProject.State.AdditionalDocumentStates);
+        => NewProject.State.AdditionalDocumentStates.GetAddedStateIds(OldProject.State.AdditionalDocumentStates);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of added analyzer config documents in the order they appear in <see cref="Project.DocumentIds"/> of <see cref="NewProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetAddedAnalyzerConfigDocuments()
-        => _newProject.State.AnalyzerConfigDocumentStates.GetAddedStateIds(_oldProject.State.AnalyzerConfigDocumentStates);
+        => NewProject.State.AnalyzerConfigDocumentStates.GetAddedStateIds(OldProject.State.AnalyzerConfigDocumentStates);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of documents with any changes (textual and non-textual)
@@ -130,37 +74,55 @@ public readonly struct ProjectChanges
         => GetChangedDocuments(onlyGetDocumentsWithTextChanges, ignoreUnchangeableDocuments: false);
 
     internal IEnumerable<DocumentId> GetChangedDocuments(bool onlyGetDocumentsWithTextChanges, bool ignoreUnchangeableDocuments)
-        => _newProject.State.DocumentStates.GetChangedStateIds(_oldProject.State.DocumentStates, onlyGetDocumentsWithTextChanges, ignoreUnchangeableDocuments);
+        => NewProject.State.DocumentStates.GetChangedStateIds(OldProject.State.DocumentStates, onlyGetDocumentsWithTextChanges, ignoreUnchangeableDocuments);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of additional documents with any changes (textual and non-textual)
     /// in the order they appear in <see cref="Project.DocumentIds"/> of <see cref="NewProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetChangedAdditionalDocuments()
-        => _newProject.State.AdditionalDocumentStates.GetChangedStateIds(_oldProject.State.AdditionalDocumentStates);
+        => NewProject.State.AdditionalDocumentStates.GetChangedStateIds(OldProject.State.AdditionalDocumentStates);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of analyzer config documents with any changes (textual and non-textual)
     /// in the order they appear in <see cref="Project.DocumentIds"/> of <see cref="NewProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetChangedAnalyzerConfigDocuments()
-        => _newProject.State.AnalyzerConfigDocumentStates.GetChangedStateIds(_oldProject.State.AnalyzerConfigDocumentStates);
+        => NewProject.State.AnalyzerConfigDocumentStates.GetChangedStateIds(OldProject.State.AnalyzerConfigDocumentStates);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of removed documents in the order they appear in <see cref="Project.DocumentIds"/> of <see cref="OldProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetRemovedDocuments()
-        => _newProject.State.DocumentStates.GetRemovedStateIds(_oldProject.State.DocumentStates);
+        => NewProject.State.DocumentStates.GetRemovedStateIds(OldProject.State.DocumentStates);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of removed additional documents in the order they appear in <see cref="Project.DocumentIds"/> of <see cref="OldProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetRemovedAdditionalDocuments()
-        => _newProject.State.AdditionalDocumentStates.GetRemovedStateIds(_oldProject.State.AdditionalDocumentStates);
+        => NewProject.State.AdditionalDocumentStates.GetRemovedStateIds(OldProject.State.AdditionalDocumentStates);
 
     /// <summary>
     /// Get <see cref="DocumentId"/>s of removed analyzer config documents in the order they appear in <see cref="Project.DocumentIds"/> of <see cref="OldProject"/>.
     /// </summary>
     public IEnumerable<DocumentId> GetRemovedAnalyzerConfigDocuments()
-        => _newProject.State.AnalyzerConfigDocumentStates.GetRemovedStateIds(_oldProject.State.AnalyzerConfigDocumentStates);
+        => NewProject.State.AnalyzerConfigDocumentStates.GetRemovedStateIds(OldProject.State.AnalyzerConfigDocumentStates);
+
+    private static IEnumerable<T> GetChangedItems<T>(IEnumerable<T> newItems, IEnumerable<T> oldItems)
+        => newItems == oldItems ? [] : newItems.Except(oldItems);
+
+    private static IEnumerable<ProjectReference> GetChangedProjectReferences(Project newProject, Project oldProject)
+    {
+        // Fast path: if the set of projects in the solution and the underlying project references
+        // collection are identical, then no project references (within the solution) have changed.
+        if (newProject.Solution.ProjectIds == oldProject.Solution.ProjectIds &&
+            newProject.State.ProjectReferences == oldProject.State.ProjectReferences)
+        {
+            return [];
+        }
+
+        // Compute the diff based on ProjectReferences, which only includes references to projects
+        // contained in the solution.
+        return newProject.ProjectReferences.Except(oldProject.ProjectReferences);
+    }
 }

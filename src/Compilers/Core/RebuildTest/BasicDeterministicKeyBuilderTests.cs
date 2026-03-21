@@ -220,7 +220,7 @@ namespace Microsoft.CodeAnalysis.Rebuild.UnitTests
       ""specifiedLanguageVersion"": ""VisualBasic15"",
       ""preprocessorSymbols"": {
         ""TARGET"": ""exe"",
-        ""VBC_VER"": ""16.9""
+        ""VBC_VER"": ""17.13""
       }
     }
   }
@@ -306,6 +306,7 @@ namespace Microsoft.CodeAnalysis.Rebuild.UnitTests
         [Fact]
         public void FeatureFlag()
         {
+            Assert.Equal("debug-determinism", CodeAnalysis.Feature.DebugDeterminism);
             var compiler = TestableCompiler.CreateBasicNetCoreApp("test.vb", @"-t:library", "-nologo", "-features:debug-determinism", "-deterministic", @"-define:_MYTYPE=""Empty""", "-debug:portable");
             var sourceFile = compiler.AddSourceFile("test.vb", @"' this is a test file");
             compiler.AddOutputFile("test.dll");
@@ -356,11 +357,11 @@ namespace Microsoft.CodeAnalysis.Rebuild.UnitTests
         ""features"": {{
           ""debug-determinism"": ""true""
         }},
-        ""languageVersion"": ""VisualBasic16_9"",
+        ""languageVersion"": ""VisualBasic17_13"",
         ""specifiedLanguageVersion"": ""Default"",
         ""preprocessorSymbols"": {{
           ""TARGET"": ""library"",
-          ""VBC_VER"": ""16.9"",
+          ""VBC_VER"": ""17.13"",
           ""_MYTYPE"": ""Empty""
         }}
       }}
@@ -381,11 +382,11 @@ namespace Microsoft.CodeAnalysis.Rebuild.UnitTests
           ""features"": {{
             ""debug-determinism"": ""true""
           }},
-          ""languageVersion"": ""VisualBasic16_9"",
+          ""languageVersion"": ""VisualBasic17_13"",
           ""specifiedLanguageVersion"": ""Default"",
           ""preprocessorSymbols"": {{
             ""TARGET"": ""library"",
-            ""VBC_VER"": ""16.9"",
+            ""VBC_VER"": ""17.13"",
             ""_MYTYPE"": ""Empty""
           }}
         }}
@@ -413,8 +414,10 @@ namespace Microsoft.CodeAnalysis.Rebuild.UnitTests
     ""pdbChecksumAlgorithm"": ""SHA256"",
     ""runtimeMetadataVersion"": null,
     ""defaultSourceFileEncoding"": null,
-    ""fallbackSourceFileEncoding"": null
-  }}
+    ""fallbackSourceFileEncoding"": null,
+    ""sourceLink"": null
+  }},
+  ""resources"": []
 }}
 ";
             AssertJson(expected, json, "toolsVersions", "references", "extensions");

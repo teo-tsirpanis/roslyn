@@ -3,9 +3,9 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Collections.Immutable;
+using System.IO;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.PooledObjects;
-using Microsoft.CodeAnalysis.Text;
 using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.Serialization;
@@ -18,8 +18,6 @@ internal static class SerializationExtensions
             SolutionCompilationStateChecksums => WellKnownSynchronizationKind.SolutionCompilationState,
             SolutionStateChecksums => WellKnownSynchronizationKind.SolutionState,
             ProjectStateChecksums => WellKnownSynchronizationKind.ProjectState,
-            DocumentStateChecksums => WellKnownSynchronizationKind.DocumentState,
-            ChecksumCollection => WellKnownSynchronizationKind.ChecksumCollection,
             SolutionInfo.SolutionAttributes => WellKnownSynchronizationKind.SolutionAttributes,
             ProjectInfo.ProjectAttributes => WellKnownSynchronizationKind.ProjectAttributes,
             DocumentInfo.DocumentAttributes => WellKnownSynchronizationKind.DocumentAttributes,
@@ -29,15 +27,16 @@ internal static class SerializationExtensions
             MetadataReference => WellKnownSynchronizationKind.MetadataReference,
             AnalyzerReference => WellKnownSynchronizationKind.AnalyzerReference,
             SerializableSourceText => WellKnownSynchronizationKind.SerializableSourceText,
-            SourceText => WellKnownSynchronizationKind.SourceText,
             SourceGeneratedDocumentIdentity => WellKnownSynchronizationKind.SourceGeneratedDocumentIdentity,
+            SourceGeneratorExecutionVersionMap => WellKnownSynchronizationKind.SourceGeneratorExecutionVersionMap,
+            ImmutableDictionary<string, StructuredAnalyzerConfigOptions> => WellKnownSynchronizationKind.FallbackAnalyzerOptions,
             _ => throw ExceptionUtilities.UnexpectedValue(value),
         };
 
     public static CompilationOptions FixUpCompilationOptions(this ProjectInfo.ProjectAttributes info, CompilationOptions compilationOptions)
     {
         return compilationOptions.WithXmlReferenceResolver(GetXmlResolver(info.FilePath))
-                                 .WithStrongNameProvider(new DesktopStrongNameProvider(GetStrongNameKeyPaths(info)));
+                                 .WithStrongNameProvider(new DesktopStrongNameProvider(GetStrongNameKeyPaths(info), Path.GetTempPath()));
     }
 
     private static XmlFileResolver GetXmlResolver(string? filePath)
@@ -64,7 +63,7 @@ internal static class SerializationExtensions
         // filePath will point to actual file on disk, but in memory solultion, or
         // one from AdhocWorkspace and etc, FilePath/OutputFilePath can be a random string.
         // Make sure we return only if given filePath is in right form.
-        if (info.FilePath == null && info.OutputFilePath == null)
+        if (info is { FilePath: null, OutputFilePath: null })
         {
             // return empty since that is what IDE does for this case
             // see AbstractProject.GetStrongNameKeyPaths
@@ -75,13 +74,13 @@ internal static class SerializationExtensions
         if (PathUtilities.IsAbsolute(info.FilePath))
         {
             // desktop strong name provider only knows how to deal with absolute path
-            builder.Add(PathUtilities.GetDirectoryName(info.FilePath)!);
+            builder.Add(PathUtilities.GetDirectoryName(info.FilePath));
         }
 
         if (PathUtilities.IsAbsolute(info.OutputFilePath))
         {
             // desktop strong name provider only knows how to deal with absolute path
-            builder.Add(PathUtilities.GetDirectoryName(info.OutputFilePath)!);
+            builder.Add(PathUtilities.GetDirectoryName(info.OutputFilePath));
         }
 
         return builder.ToImmutableAndFree();

@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -28,27 +27,25 @@ internal abstract class AbstractFileHeaderCodeFixProvider : CodeFixProvider
     public override ImmutableArray<string> FixableDiagnosticIds { get; }
         = [IDEDiagnosticIds.FileHeaderMismatch];
 
-    public override Task RegisterCodeFixesAsync(CodeFixContext context)
+    public override async Task RegisterCodeFixesAsync(CodeFixContext context)
     {
         foreach (var diagnostic in context.Diagnostics)
         {
             context.RegisterCodeFix(
                 CodeAction.Create(
                     CodeFixesResources.Add_file_header,
-                    cancellationToken => GetTransformedDocumentAsync(context.Document, context.GetOptionsProvider(), cancellationToken),
+                    cancellationToken => GetTransformedDocumentAsync(context.Document, cancellationToken),
                     nameof(AbstractFileHeaderCodeFixProvider)),
                 diagnostic);
         }
-
-        return Task.CompletedTask;
     }
 
-    private async Task<Document> GetTransformedDocumentAsync(Document document, CodeActionOptionsProvider fallbackOptions, CancellationToken cancellationToken)
-        => document.WithSyntaxRoot(await GetTransformedSyntaxRootAsync(document, fallbackOptions, cancellationToken).ConfigureAwait(false));
+    private async Task<Document> GetTransformedDocumentAsync(Document document, CancellationToken cancellationToken)
+        => document.WithSyntaxRoot(await GetTransformedSyntaxRootAsync(document, cancellationToken).ConfigureAwait(false));
 
-    private async Task<SyntaxNode> GetTransformedSyntaxRootAsync(Document document, CodeActionOptionsProvider fallbackOptions, CancellationToken cancellationToken)
+    private async Task<SyntaxNode> GetTransformedSyntaxRootAsync(Document document, CancellationToken cancellationToken)
     {
-        var options = await document.GetCodeFixOptionsAsync(fallbackOptions, cancellationToken).ConfigureAwait(false);
+        var options = await document.GetLineFormattingOptionsAsync(cancellationToken).ConfigureAwait(false);
         var generator = document.GetRequiredLanguageService<SyntaxGeneratorInternal>();
         var newLineTrivia = generator.EndOfLine(options.NewLine);
 
@@ -232,6 +229,6 @@ internal abstract class AbstractFileHeaderCodeFixProvider : CodeFixProvider
             if (diagnostics.IsEmpty)
                 return null;
 
-            return await this.GetTransformedDocumentAsync(document, context.GetOptionsProvider(), context.CancellationToken).ConfigureAwait(false);
+            return await this.GetTransformedDocumentAsync(document, context.CancellationToken).ConfigureAwait(false);
         });
 }

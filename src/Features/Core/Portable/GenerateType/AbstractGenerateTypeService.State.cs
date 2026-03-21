@@ -17,7 +17,7 @@ namespace Microsoft.CodeAnalysis.GenerateType;
 
 internal abstract partial class AbstractGenerateTypeService<TService, TSimpleNameSyntax, TObjectCreationExpressionSyntax, TExpressionSyntax, TTypeDeclarationSyntax, TArgumentSyntax>
 {
-    protected class State
+    protected sealed class State
     {
         public string Name { get; private set; } = null!;
         public bool NameIsVerbatim { get; private set; }
@@ -65,22 +65,17 @@ internal abstract partial class AbstractGenerateTypeService<TService, TSimpleNam
         private State(Compilation compilation)
             => Compilation = compilation;
 
-        public static async Task<State?> GenerateAsync(
+        public static async ValueTask<State?> GenerateAsync(
             TService service,
             SemanticDocument document,
             SyntaxNode node,
             CancellationToken cancellationToken)
         {
             var state = new State(document.SemanticModel.Compilation);
-            if (!await state.TryInitializeAsync(service, document, node, cancellationToken).ConfigureAwait(false))
-            {
-                return null;
-            }
-
-            return state;
+            return await state.TryInitializeAsync(service, document, node, cancellationToken).ConfigureAwait(false) ? state : (State?)null;
         }
 
-        private async Task<bool> TryInitializeAsync(
+        private async ValueTask<bool> TryInitializeAsync(
             TService service,
             SemanticDocument semanticDocument,
             SyntaxNode node,
@@ -131,7 +126,8 @@ internal abstract partial class AbstractGenerateTypeService<TService, TSimpleNam
             }
 
             var semanticFacts = semanticDocument.Document.GetRequiredLanguageService<ISemanticFactsService>();
-            if (!semanticFacts.IsTypeContext(semanticModel, NameOrMemberAccessExpression.SpanStart, cancellationToken) &&
+            if (!IsInsideDocumentationComment(NameOrMemberAccessExpression, syntaxFacts) &&
+                !semanticFacts.IsTypeContext(semanticModel, NameOrMemberAccessExpression.SpanStart, cancellationToken) &&
                 !semanticFacts.IsExpressionContext(semanticModel, NameOrMemberAccessExpression.SpanStart, cancellationToken) &&
                 !semanticFacts.IsStatementContext(semanticModel, NameOrMemberAccessExpression.SpanStart, cancellationToken) &&
                 !semanticFacts.IsInsideNameOfExpression(semanticModel, NameOrMemberAccessExpression, cancellationToken) &&
@@ -193,6 +189,17 @@ internal abstract partial class AbstractGenerateTypeService<TService, TSimpleNam
             return TypeToGenerateInOpt != null || NamespaceToGenerateInOpt != null;
         }
 
+        private static bool IsInsideDocumentationComment(SyntaxNode node, ISyntaxFactsService syntaxFacts)
+        {
+            for (var current = node; current != null; current = current.Parent)
+            {
+                if (syntaxFacts.IsDocumentationComment(current))
+                    return true;
+            }
+
+            return false;
+        }
+
         private void InferBaseType(
             TService service,
             SemanticDocument document,
@@ -211,7 +218,7 @@ internal abstract partial class AbstractGenerateTypeService<TService, TSimpleNam
             {
                 SetBaseType(this.Compilation.ExceptionType());
             }
-            else if (syntaxFacts.IsAttributeName(NameOrMemberAccessExpression))
+            else if (syntaxFacts.IsNameOfAttribute(NameOrMemberAccessExpression))
             {
                 SetBaseType(this.Compilation.AttributeType());
             }
@@ -280,7 +287,7 @@ internal abstract partial class AbstractGenerateTypeService<TService, TSimpleNam
             return service.IsInInterfaceList(NameOrMemberAccessExpression);
         }
 
-        private async Task DetermineNamespaceOrTypeToGenerateInAsync(
+        private async ValueTask DetermineNamespaceOrTypeToGenerateInAsync(
             TService service,
             SemanticDocument document,
             CancellationToken cancellationToken)
@@ -419,7 +426,7 @@ internal abstract partial class AbstractGenerateTypeService<TService, TSimpleNam
         }
     }
 
-    protected class GenerateTypeServiceStateOptions
+    protected sealed class GenerateTypeServiceStateOptions
     {
         public TExpressionSyntax? NameOrMemberAccessExpression { get; set; }
         public TObjectCreationExpressionSyntax? ObjectCreationExpressionOpt { get; set; }

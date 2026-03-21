@@ -78,10 +78,7 @@ namespace Microsoft.CodeAnalysis.CommandLine
         public static string GetClientDirectory() =>
             // VBCSCompiler is installed in the same directory as csc.exe and vbc.exe which is also the 
             // location of the response files.
-            //
-            // BaseDirectory was mistakenly marked as potentially null in 3.1
-            // https://github.com/dotnet/runtime/pull/32486
-            AppDomain.CurrentDomain.BaseDirectory!;
+            AppDomain.CurrentDomain.BaseDirectory;
 
         /// <summary>
         /// Returns the directory that contains mscorlib, or null when running on CoreCLR.
@@ -111,7 +108,7 @@ namespace Microsoft.CodeAnalysis.CommandLine
             var client = new BuildClient(logger, language, compileFunc, compileOnServerFunc);
             var clientDir = GetClientDirectory();
             var workingDir = Directory.GetCurrentDirectory();
-            var tempDir = BuildServerConnection.GetTempPath(workingDir);
+            var tempDir = Path.GetTempPath();
             var buildPaths = new BuildPaths(clientDir: clientDir, workingDir: workingDir, sdkDir: sdkDir, tempDir: tempDir);
             var originalArguments = GetCommandLineArgs(arguments);
             return client.RunCompilation(originalArguments, buildPaths).ExitCode;
@@ -192,7 +189,7 @@ namespace Microsoft.CodeAnalysis.CommandLine
 
         private int RunLocalCompilation(string[] arguments, BuildPaths buildPaths, TextWriter textWriter)
         {
-            var loader = new DefaultAnalyzerAssemblyLoader();
+            var loader = new AnalyzerAssemblyLoader();
             return _compileFunc(arguments, buildPaths, textWriter, loader);
         }
 
@@ -351,6 +348,8 @@ namespace Microsoft.CodeAnalysis.CommandLine
         /// </summary>
         private static IEnumerable<string> GetCommandLineWindows(IEnumerable<string> args)
         {
+            Debug.Assert(PlatformInformation.IsWindows);
+
             IntPtr ptr = NativeMethods.GetCommandLine();
             if (ptr == IntPtr.Zero)
             {

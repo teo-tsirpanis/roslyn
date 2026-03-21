@@ -19,5 +19,8 @@ namespace Microsoft.CodeAnalysis.CSharp
         ScopedRefAttribute = 0x80,
         RefSafetyRulesAttribute = 0x100,
         RequiresLocationAttribute = 0x200,
+        ParamCollectionAttribute = 0x400,
+        ExtensionMarkerAttribute = 0x800,
+        MemorySafetyRulesAttribute = 0x1000,
     }
 }

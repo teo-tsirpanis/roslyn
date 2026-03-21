@@ -8,6 +8,7 @@ using System.Composition;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.CodeAnalysis.CSharp.Extensions.ContextQuery;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.Host.Mef;
@@ -16,22 +17,26 @@ using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Shared.Extensions.ContextQuery;
 using Microsoft.CodeAnalysis.Shared.Utilities;
+using Microsoft.CodeAnalysis.Simplification;
 using Microsoft.CodeAnalysis.Snippets;
 using Microsoft.CodeAnalysis.Snippets.SnippetProviders;
 using Microsoft.CodeAnalysis.Text;
 
 namespace Microsoft.CodeAnalysis.CSharp.Snippets;
 
-[ExportSnippetProvider(nameof(ISnippetProvider), LanguageNames.CSharp), Shared]
-internal sealed class CSharpForEachLoopSnippetProvider : AbstractForEachLoopSnippetProvider
-{
-    [ImportingConstructor]
-    [Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
-    public CSharpForEachLoopSnippetProvider()
-    {
-    }
+using static CSharpSyntaxTokens;
+using static SyntaxFactory;
 
-    protected override bool IsValidSnippetLocation(in SnippetContext context, CancellationToken cancellationToken)
+[ExportSnippetProvider(nameof(ISnippetProvider), LanguageNames.CSharp), Shared]
+[method: ImportingConstructor]
+[method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
+internal sealed class CSharpForEachLoopSnippetProvider() : AbstractForEachLoopSnippetProvider<ForEachStatementSyntax>
+{
+    public override string Identifier => CSharpSnippetIdentifiers.ForEach;
+
+    public override string Description => FeaturesResources.foreach_loop;
+
+    protected override bool IsValidSnippetLocationCore(SnippetContext context, CancellationToken cancellationToken)
     {
         var syntaxContext = context.SyntaxContext;
         var token = syntaxContext.TargetToken;
@@ -45,15 +50,19 @@ internal sealed class CSharpForEachLoopSnippetProvider : AbstractForEachLoopSnip
             return true;
         }
 
-        return base.IsValidSnippetLocation(in context, cancellationToken);
+        return base.IsValidSnippetLocationCore(context, cancellationToken);
     }
 
-    protected override SyntaxNode GenerateStatement(SyntaxGenerator generator, SyntaxContext syntaxContext, InlineExpressionInfo? inlineExpressionInfo)
+    protected override bool CanInsertStatementAfterToken(SyntaxToken token)
+        => token.IsBeginningOfStatementContext() || token.IsBeginningOfGlobalStatementContext();
+
+    protected override ForEachStatementSyntax GenerateStatement(
+        SyntaxGenerator generator, SyntaxContext syntaxContext, SimplifierOptions simplifierOptions, InlineExpressionInfo? inlineExpressionInfo)
     {
         var semanticModel = syntaxContext.SemanticModel;
         var position = syntaxContext.Position;
 
-        var varIdentifier = SyntaxFactory.IdentifierName("var");
+        var varIdentifier = IdentifierName("var");
         var collectionIdentifier = (ExpressionSyntax?)inlineExpressionInfo?.Node;
 
         if (collectionIdentifier is null)
@@ -63,8 +72,8 @@ internal sealed class CSharpForEachLoopSnippetProvider : AbstractForEachLoopSnip
                 (isAsync ? symbolType.CanBeAsynchronouslyEnumerated(semanticModel.Compilation) : symbolType.CanBeEnumerated()) &&
                 symbol.Kind is SymbolKind.Local or SymbolKind.Field or SymbolKind.Parameter or SymbolKind.Property);
             collectionIdentifier = enumerationSymbol is null
-                ? SyntaxFactory.IdentifierName("collection")
-                : SyntaxFactory.IdentifierName(enumerationSymbol.Name);
+                ? IdentifierName("collection")
+                : IdentifierName(enumerationSymbol.Name);
         }
 
         var itemString = NameGenerator.GenerateUniqueName(
@@ -75,24 +84,24 @@ internal sealed class CSharpForEachLoopSnippetProvider : AbstractForEachLoopSnip
         if (inlineExpressionInfo is { TypeInfo: var typeInfo } &&
             typeInfo.Type!.CanBeAsynchronouslyEnumerated(semanticModel.Compilation))
         {
-            forEachStatement = SyntaxFactory.ForEachStatement(
-                SyntaxFactory.Token(SyntaxKind.AwaitKeyword),
-                SyntaxFactory.Token(SyntaxKind.ForEachKeyword),
-                SyntaxFactory.Token(SyntaxKind.OpenParenToken),
+            forEachStatement = ForEachStatement(
+                AwaitKeyword,
+                ForEachKeyword,
+                OpenParenToken,
                 varIdentifier,
-                SyntaxFactory.Identifier(itemString),
-                SyntaxFactory.Token(SyntaxKind.InKeyword),
+                Identifier(itemString),
+                InKeyword,
                 collectionIdentifier.WithoutLeadingTrivia(),
-                SyntaxFactory.Token(SyntaxKind.CloseParenToken),
-                SyntaxFactory.Block());
+                CloseParenToken,
+                Block());
         }
         else
         {
-            forEachStatement = SyntaxFactory.ForEachStatement(
+            forEachStatement = ForEachStatement(
                 varIdentifier,
                 itemString,
                 collectionIdentifier.WithoutLeadingTrivia(),
-                SyntaxFactory.Block());
+                Block());
         }
 
         return forEachStatement.NormalizeWhitespace();
@@ -102,40 +111,28 @@ internal sealed class CSharpForEachLoopSnippetProvider : AbstractForEachLoopSnip
     /// Goes through each piece of the foreach statement and extracts the identifiers
     /// as well as their locations to create SnippetPlaceholder's of each.
     /// </summary>
-    protected override ImmutableArray<SnippetPlaceholder> GetPlaceHolderLocationsList(SyntaxNode node, ISyntaxFacts syntaxFacts, CancellationToken cancellationToken)
+    protected override ValueTask<ImmutableArray<SnippetPlaceholder>> GetPlaceHolderLocationsListAsync(
+        Document document, ForEachStatementSyntax node, ISyntaxFacts syntaxFacts, CancellationToken cancellationToken)
     {
         using var _ = ArrayBuilder<SnippetPlaceholder>.GetInstance(out var arrayBuilder);
-        GetPartsOfForEachStatement(node, out var identifier, out var expression, out var _1);
-        arrayBuilder.Add(new SnippetPlaceholder(identifier.ToString(), identifier.SpanStart));
+        arrayBuilder.Add(new SnippetPlaceholder(node.Identifier.ToString(), node.Identifier.SpanStart));
 
         if (!ConstructedFromInlineExpression)
-            arrayBuilder.Add(new SnippetPlaceholder(expression.ToString(), expression.SpanStart));
+            arrayBuilder.Add(new SnippetPlaceholder(node.Expression.ToString(), node.Expression.SpanStart));
 
-        return arrayBuilder.ToImmutableArray();
+        return new(arrayBuilder.ToImmutableAndClear());
     }
 
-    protected override int GetTargetCaretPosition(ISyntaxFactsService syntaxFacts, SyntaxNode caretTarget, SourceText sourceText)
-    {
-        return CSharpSnippetHelpers.GetTargetCaretPositionInBlock<ForEachStatementSyntax>(
-            caretTarget,
+    protected override int GetTargetCaretPosition(ForEachStatementSyntax forEachStatement, SourceText sourceText)
+        => CSharpSnippetHelpers.GetTargetCaretPositionInBlock(
+            forEachStatement,
             static s => (BlockSyntax)s.Statement,
             sourceText);
-    }
 
-    protected override Task<Document> AddIndentationToDocumentAsync(Document document, CancellationToken cancellationToken)
-    {
-        return CSharpSnippetHelpers.AddBlockIndentationToDocumentAsync<ForEachStatementSyntax>(
+    protected override Task<Document> AddIndentationToDocumentAsync(Document document, ForEachStatementSyntax forEachStatement, CancellationToken cancellationToken)
+        => CSharpSnippetHelpers.AddBlockIndentationToDocumentAsync(
             document,
-            FindSnippetAnnotation,
+            forEachStatement,
             static s => (BlockSyntax)s.Statement,
             cancellationToken);
-    }
-
-    private static void GetPartsOfForEachStatement(SyntaxNode node, out SyntaxToken identifier, out SyntaxNode expression, out SyntaxNode statement)
-    {
-        var forEachStatement = (ForEachStatementSyntax)node;
-        identifier = forEachStatement.Identifier;
-        expression = forEachStatement.Expression;
-        statement = forEachStatement.Statement;
-    }
 }

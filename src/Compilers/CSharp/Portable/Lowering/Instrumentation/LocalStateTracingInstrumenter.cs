@@ -7,9 +7,9 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using Microsoft.CodeAnalysis.Collections;
 using Microsoft.CodeAnalysis.CSharp.Symbols;
 using Microsoft.CodeAnalysis.PooledObjects;
-using Microsoft.CodeAnalysis.Shared.Collections;
 using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.CSharp
@@ -111,7 +111,7 @@ namespace Microsoft.CodeAnalysis.CSharp
 
                 if (isMethodBody)
                 {
-                    Debug.Assert(_lazyPreviousContextVariables?.IsEmpty() != false);
+                    Debug.Assert(_lazyPreviousContextVariables?.IsEmpty != false);
                     _lazyPreviousContextVariables?.Free();
                     _lazyPreviousContextVariables = null;
                 }
@@ -236,6 +236,8 @@ namespace Microsoft.CodeAnalysis.CSharp
                         => WellKnownMember.Microsoft_CodeAnalysis_Runtime_LocalStoreTracker__LogLocalStoreUnmanaged,
                     _ when variableType.IsRefLikeType && !hasOverriddenToString(variableType)
                         => null, // not possible to invoke ToString on ref struct that doesn't override it
+                    _ when variableType is TypeParameterSymbol { AllowsRefLikeType: true }
+                        => null, // not possible to invoke ToString on ref struct type parameter
                     _ when variableType.TypeKind is TypeKind.Struct
                         // we'll emit ToString constrained virtcall to avoid boxing the struct
                         => WellKnownMember.Microsoft_CodeAnalysis_Runtime_LocalStoreTracker__LogLocalStoreString,
@@ -266,6 +268,9 @@ namespace Microsoft.CodeAnalysis.CSharp
         private MethodSymbol? GetWellKnownMethodSymbol(WellKnownMember overload, SyntaxNode syntax)
             => (MethodSymbol?)Binder.GetWellKnownTypeMember(_factory.Compilation, overload, _diagnostics, syntax: syntax, isOptional: false);
 
+        private MethodSymbol? GetSpecialMethodSymbol(SpecialMember overload, SyntaxNode syntax)
+            => (MethodSymbol?)Binder.GetSpecialTypeMember(_factory.Compilation, overload, _diagnostics, syntax: syntax);
+
         public override void PreInstrumentBlock(BoundBlock original, LocalRewriter rewriter)
         {
             Previous.PreInstrumentBlock(original, rewriter);
@@ -293,11 +298,13 @@ namespace Microsoft.CodeAnalysis.CSharp
             Debug.Assert(_factory.TopLevelMethod is not null);
             Debug.Assert(_factory.CurrentFunction is not null);
 
-            var isStateMachine = _factory.CurrentFunction.IsAsync || _factory.CurrentFunction.IsIterator;
+            var currentFunction = _factory.CurrentFunction;
+            var isStateMachine = (currentFunction.IsAsync && !_factory.Compilation.IsRuntimeAsyncEnabledIn(currentFunction))
+                                 || currentFunction.IsIterator;
 
             var prologueBuilder = ArrayBuilder<BoundStatement>.GetInstance(_factory.CurrentFunction.ParameterCount);
 
-            foreach (var parameter in _factory.CurrentFunction.Parameters)
+            foreach (var parameter in _factory.CurrentFunction.GetParametersIncludingExtensionParameter(skipExtensionIfStatic: true))
             {
                 if (parameter.RefKind == RefKind.Out || parameter.IsDiscard)
                 {
@@ -307,8 +314,12 @@ namespace Microsoft.CodeAnalysis.CSharp
                 var parameterLogger = GetLocalOrParameterStoreLogger(parameter.Type, parameter, refAssignmentSourceIsLocal: null, _factory.Syntax);
                 if (parameterLogger != null)
                 {
+                    int ordinal = parameter.ContainingSymbol.IsExtensionBlockMember()
+                        ? SourceExtensionImplementationMethodSymbol.GetImplementationParameterOrdinal(parameter)
+                        : parameter.Ordinal;
+
                     prologueBuilder.Add(_factory.ExpressionStatement(_factory.Call(receiver: _factory.Local(_scope.ContextVariable), parameterLogger,
-                        MakeStoreLoggerArguments(parameterLogger.Parameters[0], parameter, parameter.Type, _factory.Parameter(parameter), refAssignmentSourceIndex: null, _factory.Literal((ushort)parameter.Ordinal)))));
+                        MakeStoreLoggerArguments(parameterLogger.Parameters[0], parameter, parameter.Type, _factory.Parameter(parameter), refAssignmentSourceIndex: null, _factory.Literal((ushort)ordinal)))));
                 }
             }
 
@@ -343,14 +354,7 @@ namespace Microsoft.CodeAnalysis.CSharp
             var instrumentationEpilogue = (returnLogger != null) ?
                 _factory.ExpressionStatement(_factory.Call(receiver: _factory.Local(_scope.ContextVariable), returnLogger)) : _factory.NoOp(NoOpStatementFlavor.Default);
 
-            // currently don't need to compose multiple instrumentations
-            Debug.Assert(instrumentation is null);
-
-            instrumentation = new BoundBlockInstrumentation(
-                _factory.Syntax,
-                _scope.ContextVariable,
-                instrumentationPrologue,
-                instrumentationEpilogue);
+            instrumentation = _factory.CombineInstrumentation(instrumentation, _scope.ContextVariable, instrumentationPrologue, instrumentationEpilogue);
 
             _scope.Close(isMethodBody);
         }
@@ -442,6 +446,7 @@ namespace Microsoft.CodeAnalysis.CSharp
             BoundExpression? refAssignmentSourceIndex,
             BoundExpression index)
         {
+            Debug.Assert(index is BoundParameterId or BoundLocalId or BoundLiteral);
             if (refAssignmentSourceIndex != null)
             {
                 return ImmutableArray.Create(_factory.Sequence(new[] { value }, refAssignmentSourceIndex), index);
@@ -463,7 +468,7 @@ namespace Microsoft.CodeAnalysis.CSharp
 
             if (parameter.Type.SpecialType == SpecialType.System_String && targetType.SpecialType != SpecialType.System_String)
             {
-                var toStringMethod = GetWellKnownMethodSymbol(WellKnownMember.System_Object__ToString, value.Syntax);
+                var toStringMethod = GetSpecialMethodSymbol(SpecialMember.System_Object__ToString, value.Syntax);
 
                 BoundExpression toString;
                 if (toStringMethod is null)
@@ -481,7 +486,9 @@ namespace Microsoft.CodeAnalysis.CSharp
                 return ImmutableArray.Create(toString, index);
             }
 
-            return ImmutableArray.Create(_factory.Convert(parameter.Type, value), index);
+            Conversion c = _factory.ClassifyEmitConversion(value, parameter.Type);
+            Debug.Assert(c.IsNumeric || c.IsReference || c.IsIdentity || c.IsPointer || c.IsBoxing || c.IsEnumeration);
+            return ImmutableArray.Create(_factory.Convert(parameter.Type, value, c), index);
         }
 
         private BoundExpression VariableRead(Symbol localOrParameterSymbol)
@@ -543,7 +550,20 @@ namespace Microsoft.CodeAnalysis.CSharp
         }
 
         public override BoundExpression InstrumentCall(BoundCall original, BoundExpression rewritten)
-            => InstrumentCall(base.InstrumentCall(original, rewritten), original.Arguments, original.ArgumentRefKindsOpt);
+        {
+            ImmutableArray<BoundExpression> arguments = original.Arguments;
+            MethodSymbol method = original.Method;
+            bool adjustForExtensionBlockMethod = method.IsExtensionBlockMember() && !method.IsStatic;
+            ImmutableArray<RefKind> argumentRefKindsOpt = NullableWalker.AdjustArgumentRefKindsIfNeeded(original.ArgumentRefKindsOpt, adjustForExtensionBlockMethod, method, arguments.Length);
+
+            if (adjustForExtensionBlockMethod)
+            {
+                Debug.Assert(original.ReceiverOpt is not null);
+                arguments = [original.ReceiverOpt, .. arguments];
+            }
+
+            return InstrumentCall(base.InstrumentCall(original, rewritten), arguments, argumentRefKindsOpt);
+        }
 
         public override BoundExpression InstrumentObjectCreationExpression(BoundObjectCreationExpression original, BoundExpression rewritten)
             => InstrumentCall(base.InstrumentObjectCreationExpression(original, rewritten), original.Arguments, original.ArgumentRefKindsOpt);
@@ -574,6 +594,7 @@ namespace Microsoft.CodeAnalysis.CSharp
                 builder.Add(invocation);
             }
 
+            // Record outbound assignments
             for (int i = 0; i < arguments.Length; i++)
             {
                 if (refKinds[i] is not (RefKind.Ref or RefKind.Out))

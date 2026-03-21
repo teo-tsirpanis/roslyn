@@ -4,12 +4,10 @@
 
 using System;
 using System.Collections.Generic;
-using System.Collections.Immutable;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis.Collections;
-using Microsoft.CodeAnalysis.Editor.Shared.Extensions;
 using Microsoft.CodeAnalysis.Text.Shared.Extensions;
 using Microsoft.VisualStudio.Text;
 using Roslyn.Utilities;
@@ -25,7 +23,8 @@ internal partial class AbstractAsynchronousTaggerProvider<TTag>
         private void OnTagsChangedForBuffer(
             ICollection<KeyValuePair<ITextBuffer, DiffResult>> changes, bool highPriority)
         {
-            _dataSource.ThreadingContext.ThrowIfNotOnUIThread();
+            // Can be called from any thread.  Just filters out changes that aren't for our buffer and adds to the right
+            // queue to actually notify interested parties.
 
             foreach (var change in changes)
             {
@@ -42,23 +41,23 @@ internal partial class AbstractAsynchronousTaggerProvider<TTag>
             }
         }
 
-        private ValueTask ProcessTagsChangedAsync(
+        private async ValueTask ProcessTagsChangedAsync(
             ImmutableSegmentedList<NormalizedSnapshotSpanCollection> snapshotSpans, CancellationToken cancellationToken)
         {
             var tagsChanged = this.TagsChanged;
             if (tagsChanged == null)
-                return ValueTaskFactory.CompletedTask;
+                return;
 
             foreach (var collection in snapshotSpans)
             {
-                if (collection.Count == 0)
+                if (collection is not ([var firstSpan, ..] and [.., var lastSpan]))
                     continue;
 
-                var snapshot = collection.First().Snapshot;
+                var snapshot = firstSpan.Snapshot;
 
                 // Coalesce the spans if there are a lot of them.
                 var coalesced = collection.Count > CoalesceDifferenceCount
-                    ? new NormalizedSnapshotSpanCollection(snapshot.GetSpanFromBounds(collection.First().Start, collection.Last().End))
+                    ? new NormalizedSnapshotSpanCollection(snapshot.GetSpanFromBounds(firstSpan.Start, lastSpan.End))
                     : collection;
 
                 _dataSource.BeforeTagsChanged(snapshot);
@@ -66,8 +65,6 @@ internal partial class AbstractAsynchronousTaggerProvider<TTag>
                 foreach (var span in coalesced)
                     tagsChanged(this, new SnapshotSpanEventArgs(span));
             }
-
-            return ValueTaskFactory.CompletedTask;
         }
     }
 }

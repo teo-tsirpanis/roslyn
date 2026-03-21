@@ -35,9 +35,10 @@ namespace Microsoft.CodeAnalysis.CSharp
             public override SyntaxList<AttributeListSyntax> ParameterAttributes(int index) => default;
             public override bool HasSignature { get { return true; } }
 
-            public override bool HasExplicitReturnType(out RefKind refKind, out TypeWithAnnotations returnType)
+            public override bool HasExplicitReturnType(out RefKind refKind, out ImmutableArray<CustomModifier> refCustomModifiers, out TypeWithAnnotations returnType)
             {
                 refKind = default;
+                refCustomModifiers = [];
                 returnType = default;
                 return false;
             }
@@ -46,7 +47,6 @@ namespace Microsoft.CodeAnalysis.CSharp
             public override int ParameterCount { get { return _parameters.Length; } }
             public override bool IsAsync { get { return false; } }
             public override bool IsStatic => false;
-            public override bool HasParamsArray => false;
             public override RefKind RefKind(int index) { return Microsoft.CodeAnalysis.RefKind.None; }
             public override ScopedKind DeclaredScope(int index) => ScopedKind.None;
             public override MessageID MessageID { get { return MessageID.IDS_FeatureQueryExpression; } } // TODO: what is the correct ID here?

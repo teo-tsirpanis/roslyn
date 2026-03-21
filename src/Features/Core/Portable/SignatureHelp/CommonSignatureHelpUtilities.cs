@@ -38,7 +38,7 @@ internal static class CommonSignatureHelpUtilities
                 argumentIndex,
                 argumentCount,
                 argumentIndex < argumentCount ? argumentNames[argumentIndex] : null,
-                argumentNames.WhereNotNull().ToImmutableArray());
+                [.. argumentNames.WhereNotNull()]);
         }
 
         return null;
@@ -100,6 +100,22 @@ internal static class CommonSignatureHelpUtilities
         return TextSpan.FromBounds(start, nextToken.SpanStart);
     }
 
+    internal static async Task<TSyntax?> TryGetSyntaxAsync<TSyntax>(
+        Document document,
+        int position,
+        SignatureHelpTriggerReason triggerReason,
+        Func<SyntaxToken, bool> isTriggerToken,
+        Func<TSyntax, SyntaxToken, bool> isArgumentListToken,
+        CancellationToken cancellationToken)
+        where TSyntax : SyntaxNode
+    {
+        var root = await document.GetRequiredSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
+        var syntaxFacts = document.GetRequiredLanguageService<ISyntaxFactsService>();
+
+        return TryGetSyntax(
+            root, position, syntaxFacts, triggerReason, isTriggerToken, isArgumentListToken, cancellationToken, out var syntax) ? syntax : null;
+    }
+
     internal static bool TryGetSyntax<TSyntax>(
         SyntaxNode root,
         int position,
@@ -145,7 +161,7 @@ internal static class CommonSignatureHelpUtilities
     }
 
     public static async Task<ImmutableArray<IMethodSymbol>> GetCollectionInitializerAddMethodsAsync(
-        Document document, SyntaxNode initializer, SignatureHelpOptions options, CancellationToken cancellationToken)
+        Document document, SyntaxNode initializer, MemberDisplayOptions options, CancellationToken cancellationToken)
     {
         if (initializer is not { Parent: not null })
             return default;
@@ -170,9 +186,8 @@ internal static class CommonSignatureHelpUtilities
             position, parentType, WellKnownMemberNames.CollectionInitializerAddMethodName, includeReducedExtensionMethods: true);
 
         var addMethods = addSymbols.OfType<IMethodSymbol>()
-                                   .Where(m => m.Parameters.Length >= 1)
-                                   .ToImmutableArray()
-                                   .FilterToVisibleAndBrowsableSymbols(options.HideAdvancedMembers, semanticModel.Compilation)
+                                   .WhereAsArray(m => m.Parameters.Length >= 1)
+                                   .FilterToVisibleAndBrowsableSymbols(options.HideAdvancedMembers, semanticModel.Compilation, inclusionFilter: static s => true)
                                    .Sort(semanticModel, position);
 
         return addMethods;

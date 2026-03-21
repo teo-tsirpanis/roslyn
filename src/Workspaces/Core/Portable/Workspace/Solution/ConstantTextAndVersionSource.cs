@@ -5,7 +5,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Threading;
 using System.Threading.Tasks;
-using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis;
 
@@ -19,11 +18,17 @@ internal sealed class ConstantTextAndVersionSource(TextAndVersion value) : IText
     public bool CanReloadText
         => false;
 
+    /// <summary>
+    /// Not built from a text loader.
+    /// </summary>
+    public TextLoader? TextLoader
+        => null;
+
     public TextAndVersion GetValue(LoadTextOptions options, CancellationToken cancellationToken)
         => _value;
 
-    public Task<TextAndVersion> GetValueAsync(LoadTextOptions options, CancellationToken cancellationToken)
-        => Task.FromResult(_value);
+    public async Task<TextAndVersion> GetValueAsync(LoadTextOptions options, CancellationToken cancellationToken)
+        => _value;
 
     public bool TryGetValue(LoadTextOptions options, [MaybeNullWhen(false)] out TextAndVersion value)
     {
@@ -37,6 +42,6 @@ internal sealed class ConstantTextAndVersionSource(TextAndVersion value) : IText
         return true;
     }
 
-    public ValueTask<VersionStamp> GetVersionAsync(LoadTextOptions options, CancellationToken cancellationToken)
-        => new(_value.Version);
+    public async ValueTask<VersionStamp> GetVersionAsync(LoadTextOptions options, CancellationToken cancellationToken)
+        => _value.Version;
 }

@@ -4,8 +4,9 @@
 
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.CodeAnalysis.FindUsages;
 using Microsoft.CodeAnalysis.ExternalAccess.VSTypeScript.Api;
+using Microsoft.CodeAnalysis.FindUsages;
+using Microsoft.CodeAnalysis.Shared.Extensions;
 
 namespace Microsoft.CodeAnalysis.ExternalAccess.VSTypeScript;
 
@@ -17,7 +18,7 @@ internal sealed class VSTypeScriptFindUsagesContext(FindUsagesContext underlying
         => new VSTypeScriptStreamingProgressTracker(UnderlyingObject.ProgressTracker);
 
     public ValueTask ReportMessageAsync(string message, CancellationToken cancellationToken)
-        => UnderlyingObject.ReportMessageAsync(message, cancellationToken);
+        => UnderlyingObject.ReportNoResultsAsync(message, cancellationToken);
 
     public ValueTask SetSearchTitleAsync(string title, CancellationToken cancellationToken)
         => UnderlyingObject.SetSearchTitleAsync(title, cancellationToken);
@@ -26,7 +27,7 @@ internal sealed class VSTypeScriptFindUsagesContext(FindUsagesContext underlying
         => UnderlyingObject.OnDefinitionFoundAsync(definition.UnderlyingObject, cancellationToken);
 
     public ValueTask OnReferenceFoundAsync(VSTypeScriptSourceReferenceItem reference, CancellationToken cancellationToken)
-        => UnderlyingObject.OnReferenceFoundAsync(reference.UnderlyingObject, cancellationToken);
+        => UnderlyingObject.OnReferencesFoundAsync(AsyncEnumerableFactory.SingletonAsync(reference.UnderlyingObject), cancellationToken);
 
     public ValueTask OnCompletedAsync(CancellationToken cancellationToken)
         => UnderlyingObject.OnCompletedAsync(cancellationToken);

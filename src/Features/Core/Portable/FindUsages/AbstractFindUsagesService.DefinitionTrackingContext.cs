@@ -6,9 +6,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.CodeAnalysis.Classification;
-using Microsoft.CodeAnalysis.FindUsages;
-using Microsoft.CodeAnalysis.Host;
+using Microsoft.CodeAnalysis.Notification;
 using Microsoft.CodeAnalysis.Shared.Utilities;
 
 namespace Microsoft.CodeAnalysis.FindUsages;
@@ -32,17 +30,17 @@ internal abstract partial class AbstractFindUsagesService
         public IStreamingProgressTracker ProgressTracker
             => _underlyingContext.ProgressTracker;
 
-        public ValueTask ReportMessageAsync(string message, CancellationToken cancellationToken)
-            => _underlyingContext.ReportMessageAsync(message, cancellationToken);
+        public ValueTask ReportNoResultsAsync(string message, CancellationToken cancellationToken)
+            => _underlyingContext.ReportNoResultsAsync(message, cancellationToken);
 
-        public ValueTask ReportInformationalMessageAsync(string message, CancellationToken cancellationToken)
-            => _underlyingContext.ReportInformationalMessageAsync(message, cancellationToken);
+        public ValueTask ReportMessageAsync(string message, NotificationSeverity severity, CancellationToken cancellationToken)
+            => _underlyingContext.ReportMessageAsync(message, severity, cancellationToken);
 
         public ValueTask SetSearchTitleAsync(string title, CancellationToken cancellationToken)
             => _underlyingContext.SetSearchTitleAsync(title, cancellationToken);
 
-        public ValueTask OnReferenceFoundAsync(SourceReferenceItem reference, CancellationToken cancellationToken)
-            => _underlyingContext.OnReferenceFoundAsync(reference, cancellationToken);
+        public ValueTask OnReferencesFoundAsync(IAsyncEnumerable<SourceReferenceItem> references, CancellationToken cancellationToken)
+            => _underlyingContext.OnReferencesFoundAsync(references, cancellationToken);
 
         public ValueTask OnDefinitionFoundAsync(DefinitionItem definition, CancellationToken cancellationToken)
         {
@@ -58,7 +56,7 @@ internal abstract partial class AbstractFindUsagesService
         {
             lock (_gate)
             {
-                return _definitions.ToImmutableArray();
+                return [.. _definitions];
             }
         }
     }

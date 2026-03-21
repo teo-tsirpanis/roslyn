@@ -18,6 +18,7 @@ using Microsoft.CodeAnalysis.ErrorReporting;
 using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.Host.Mef;
 using Microsoft.CodeAnalysis.PooledObjects;
+using Microsoft.CodeAnalysis.Shared.Extensions;
 using Microsoft.CodeAnalysis.Shared.TestHooks;
 using Microsoft.CodeAnalysis.Text;
 using Microsoft.CodeAnalysis.Text.Shared.Extensions;
@@ -38,12 +39,21 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
     [ExportWorkspaceServiceFactory(typeof(IActiveStatementTrackingService), ServiceLayer.Editor), Shared]
     [method: ImportingConstructor]
     [method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
-    internal sealed class Factory(IAsynchronousOperationListenerProvider listenerProvider) : IWorkspaceServiceFactory
+    internal sealed class ServiceFactory(IAsynchronousOperationListenerProvider listenerProvider) : IWorkspaceServiceFactory
     {
         private readonly IAsynchronousOperationListenerProvider _listenerProvider = listenerProvider;
 
         public IWorkspaceService CreateService(HostWorkspaceServices workspaceServices)
             => new ActiveStatementTrackingService(workspaceServices.Workspace, _listenerProvider.GetListener(FeatureAttribute.EditAndContinue));
+    }
+
+    [ExportWorkspaceService(typeof(IActiveStatementSpanLocator), ServiceLayer.Editor), Shared]
+    [method: ImportingConstructor]
+    [method: Obsolete(MefConstruction.ImportingConstructorMessage, error: true)]
+    internal sealed class SpanLocator() : IActiveStatementSpanLocator
+    {
+        public ValueTask<ImmutableArray<ActiveStatementSpan>> GetSpansAsync(Solution solution, DocumentId? documentId, string filePath, CancellationToken cancellationToken)
+            => solution.Services.GetRequiredService<IActiveStatementTrackingService>().GetSpansAsync(solution, documentId, filePath, cancellationToken);
     }
 
     private readonly IAsynchronousOperationListener _listener = listener;
@@ -56,7 +66,7 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
     /// </summary>
     public event Action? TrackingChanged;
 
-    public void StartTracking(Solution solution, IActiveStatementSpanProvider spanProvider)
+    public void StartTracking(Solution solution, IActiveStatementSpanFactory spanProvider)
     {
         var newSession = new TrackingSession(_workspace, spanProvider);
         if (Interlocked.CompareExchange(ref _session, newSession, null) != null)
@@ -91,8 +101,9 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
     {
         private readonly Workspace _workspace;
         private readonly CancellationTokenSource _cancellationSource = new();
-        private readonly IActiveStatementSpanProvider _spanProvider;
-        private readonly ICompileTimeSolutionProvider _compileTimeSolutionProvider;
+        private readonly IActiveStatementSpanFactory _spanProvider;
+        private readonly WorkspaceEventRegistration _documentOpenedHandlerDisposer;
+        private readonly WorkspaceEventRegistration _documentClosedHandlerDisposer;
 
         #region lock(_trackingSpans)
 
@@ -105,14 +116,13 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
 
         #endregion
 
-        public TrackingSession(Workspace workspace, IActiveStatementSpanProvider spanProvider)
+        public TrackingSession(Workspace workspace, IActiveStatementSpanFactory spanProvider)
         {
             _workspace = workspace;
             _spanProvider = spanProvider;
-            _compileTimeSolutionProvider = workspace.Services.GetRequiredService<ICompileTimeSolutionProvider>();
 
-            _workspace.DocumentOpened += DocumentOpened;
-            _workspace.DocumentClosed += DocumentClosed;
+            _documentOpenedHandlerDisposer = _workspace.RegisterDocumentOpenedHandler(DocumentOpened);
+            _documentClosedHandlerDisposer = _workspace.RegisterDocumentClosedHandler(DocumentClosed);
         }
 
         internal Dictionary<string, ImmutableArray<ActiveStatementTrackingSpan>> Test_GetTrackingSpans()
@@ -123,8 +133,8 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
             _cancellationSource.Cancel();
             _cancellationSource.Dispose();
 
-            _workspace.DocumentOpened -= DocumentOpened;
-            _workspace.DocumentClosed -= DocumentClosed;
+            _documentOpenedHandlerDisposer.Dispose();
+            _documentClosedHandlerDisposer.Dispose();
 
             lock (_trackingSpans)
             {
@@ -132,7 +142,7 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
             }
         }
 
-        private void DocumentClosed(object? sender, DocumentEventArgs e)
+        private void DocumentClosed(DocumentEventArgs e)
         {
             if (e.Document.FilePath != null)
             {
@@ -143,29 +153,26 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
             }
         }
 
-        private void DocumentOpened(object? sender, DocumentEventArgs e)
+        private void DocumentOpened(DocumentEventArgs e)
             => _ = TrackActiveSpansAsync(e.Document);
 
-        private async Task TrackActiveSpansAsync(Document designTimeDocument)
+        private async Task TrackActiveSpansAsync(Document document)
         {
             try
             {
                 var cancellationToken = _cancellationSource.Token;
 
-                if (!designTimeDocument.DocumentState.SupportsEditAndContinue())
+                if (!document.DocumentState.SupportsEditAndContinue())
                 {
                     return;
                 }
 
-                var compileTimeSolution = _compileTimeSolutionProvider.GetCompileTimeSolution(designTimeDocument.Project.Solution);
-                var compileTimeDocument = await compileTimeSolution.GetDocumentAsync(designTimeDocument.Id, includeSourceGenerated: true, cancellationToken).ConfigureAwait(false);
-
-                if (compileTimeDocument == null || !TryGetSnapshot(compileTimeDocument, out var snapshot))
+                if (!TryGetSnapshot(document, out var snapshot))
                 {
                     return;
                 }
 
-                _ = await GetAdjustedTrackingSpansAsync(compileTimeDocument, snapshot, cancellationToken).ConfigureAwait(false);
+                _ = await GetAdjustedTrackingSpansAsync(document, snapshot, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -188,6 +195,9 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
                 {
                     return;
                 }
+
+                // Make sure the solution snapshot has all source-generated documents in the affected projects up-to-date:
+                solution = solution.WithUpToDateSourceGeneratorDocuments(openDocumentIds.Select(static d => d.ProjectId));
 
                 var baseActiveStatementSpans = await _spanProvider.GetBaseActiveStatementSpansAsync(solution, openDocumentIds, cancellationToken).ConfigureAwait(false);
                 if (baseActiveStatementSpans.IsDefault)
@@ -259,7 +269,7 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
                 var newSpan = newSpans[i];
 
                 Contract.ThrowIfFalse(oldSpan.Flags == newSpan.Flags);
-                Contract.ThrowIfFalse(oldSpan.Ordinal == newSpan.Ordinal);
+                Contract.ThrowIfFalse(oldSpan.Id == newSpan.Id);
 
                 var newTextSpan = snapshot.GetTextSpan(newSpan.LineSpan).ToSpan();
                 if (oldSpan.Span.GetSpan(snapshot).Span != newTextSpan)
@@ -272,7 +282,7 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
 
                     lazyBuilder[i] = new ActiveStatementTrackingSpan(
                         snapshot.CreateTrackingSpan(newTextSpan, SpanTrackingMode.EdgeExclusive),
-                        newSpan.Ordinal,
+                        newSpan.Id,
                         newSpan.Flags,
                         newSpan.UnmappedDocumentId);
                 }
@@ -316,7 +326,7 @@ internal sealed class ActiveStatementTrackingService(Workspace workspace, IAsync
                     var snapshot = sourceText.FindCorrespondingEditorTextSnapshot();
                     if (snapshot != null && snapshot.TextBuffer == documentSpans.First().Span.TextBuffer)
                     {
-                        return documentSpans.SelectAsArray(s => new ActiveStatementSpan(s.Ordinal, s.Span.GetSpan(snapshot).ToLinePositionSpan(), s.Flags, s.UnmappedDocumentId));
+                        return documentSpans.SelectAsArray(s => new ActiveStatementSpan(s.Id, s.Span.GetSpan(snapshot).ToLinePositionSpan(), s.Flags, s.UnmappedDocumentId));
                     }
                 }
             }

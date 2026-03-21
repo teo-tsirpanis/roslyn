@@ -19,14 +19,6 @@ namespace RunTests
 {
     internal sealed partial class Program
     {
-        private static readonly ImmutableHashSet<string> PrimaryProcessNames = ImmutableHashSet.Create(
-            StringComparer.OrdinalIgnoreCase,
-            "devenv",
-            "xunit.console",
-            "xunit.console.x86",
-            "ServiceHub.RoslynCodeAnalysisService",
-            "ServiceHub.RoslynCodeAnalysisService32");
-
         internal const int ExitSuccess = 0;
         internal const int ExitFailure = 1;
 
@@ -127,11 +119,19 @@ namespace RunTests
 
         private static async Task<int> RunAsync(Options options, CancellationToken cancellationToken)
         {
+            var assemblyFilePaths = GetAssemblyFilePaths(options);
+            if (options.UseHelix)
+            {
+                return await HelixTestRunner.RunAsync(
+                    options,
+                    assemblyFilePaths,
+                    cancellationToken);
+            }
+
             var testExecutor = new ProcessTestExecutor();
             var testRunner = new TestRunner(options, testExecutor);
             var start = DateTime.Now;
-            var workItems = await GetWorkItemsAsync(options, cancellationToken);
-            if (workItems.Length == 0)
+            if (assemblyFilePaths.Length == 0)
             {
                 WriteLogFile(options);
                 ConsoleUtil.WriteLine(ConsoleColor.Red, "No assemblies to test");
@@ -139,11 +139,8 @@ namespace RunTests
             }
 
             ConsoleUtil.WriteLine($"Proc dump location: {options.ProcDumpFilePath}");
-            ConsoleUtil.WriteLine($"Running tests in {workItems.Length} partitions");
 
-            var result = options.UseHelix
-                ? await testRunner.RunAllOnHelixAsync(workItems, options, cancellationToken).ConfigureAwait(true)
-                : await testRunner.RunAllAsync(workItems, cancellationToken).ConfigureAwait(true);
+            var result = await testRunner.RunAllAsync(assemblyFilePaths, cancellationToken).ConfigureAwait(true);
             var elapsed = DateTime.Now - start;
 
             ConsoleUtil.WriteLine($"Test execution time: {elapsed}");
@@ -280,14 +277,6 @@ namespace RunTests
             WriteLogFile(options);
         }
 
-        private static async Task<ImmutableArray<WorkItemInfo>> GetWorkItemsAsync(Options options, CancellationToken cancellationToken)
-        {
-            var scheduler = new AssemblyScheduler(options);
-            var assemblyPaths = GetAssemblyFilePaths(options);
-            var workItems = await scheduler.ScheduleAsync(assemblyPaths, cancellationToken);
-            return workItems;
-        }
-
         private static ImmutableArray<AssemblyInfo> GetAssemblyFilePaths(Options options)
         {
             var list = new List<AssemblyInfo>();
@@ -312,7 +301,7 @@ namespace RunTests
 
                 foreach (var targetFrameworkDirectory in Directory.EnumerateDirectories(configDirectory))
                 {
-                    var tfm = Path.GetFileName(targetFrameworkDirectory)!;
+                    var tfm = Path.GetFileName(targetFrameworkDirectory);
                     if (!IsMatch(options.TestRuntime, tfm))
                     {
                         Console.WriteLine($"Skipping {name} {tfm} does not match the target framework");

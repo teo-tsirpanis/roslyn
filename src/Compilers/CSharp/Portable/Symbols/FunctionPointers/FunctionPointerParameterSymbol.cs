@@ -28,6 +28,9 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         public override int Ordinal { get; }
         public override Symbol ContainingSymbol => _containingSymbol;
         public override ImmutableArray<CustomModifier> RefCustomModifiers { get; }
+        internal override bool HasEnumeratorCancellationAttribute => false;
+
+        internal override ScopedKind DeclaredScope => throw ExceptionUtilities.Unreachable();
 
         internal override ScopedKind EffectiveScope
             => ParameterHelpers.IsRefScopedByDefault(this) ? ScopedKind.ScopedRef : ScopedKind.None;
@@ -70,13 +73,15 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         public override ImmutableArray<Location> Locations => ImmutableArray<Location>.Empty;
         public override ImmutableArray<SyntaxReference> DeclaringSyntaxReferences => ImmutableArray<SyntaxReference>.Empty;
         public override bool IsDiscard => false;
-        public override bool IsParams => false;
+        public override bool IsParamsArray => false;
+        public override bool IsParamsCollection => false;
         public override bool IsImplicitlyDeclared => true;
         internal override MarshalPseudoCustomAttributeData? MarshallingInformation => null;
         internal override bool IsMetadataOptional => false;
         internal override bool IsMetadataIn => RefKind is RefKind.In or RefKind.RefReadOnlyParameter;
         internal override bool IsMetadataOut => RefKind == RefKind.Out;
         internal override ConstantValue? ExplicitDefaultConstantValue => null;
+        internal override ConstantValue? DefaultValueFromAttributes => null;
         internal override bool IsIDispatchConstant => false;
         internal override bool IsIUnknownConstant => false;
         internal override bool IsCallerFilePath => false;

@@ -69,6 +69,11 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         public abstract ImmutableArray<CustomModifier> RefCustomModifiers { get; }
 
         /// <summary>
+        /// Indicates whether the parameter has the EnumeratorCancellation attribute.
+        /// </summary>
+        internal abstract bool HasEnumeratorCancellationAttribute { get; }
+
+        /// <summary>
         /// Describes how the parameter is marshalled when passed to native code.
         /// Null if no specific marshalling information is available for the parameter.
         /// </summary>
@@ -119,7 +124,16 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         /// Note: it is possible for any parameter to have the [ParamArray] attribute (for instance, in IL),
         ///     even if it is not the last parameter. So check for that.
         /// </summary>
-        public abstract bool IsParams { get; }
+        public abstract bool IsParamsArray { get; }
+
+        /// <summary>
+        /// Returns true if the parameter was declared as a parameter collection.
+        /// Note: it is possible for any parameter to have the [ParamCollection] attribute (for instance, in IL),
+        ///     even if it is not the last parameter. So check for that.
+        /// </summary>
+        public abstract bool IsParamsCollection { get; }
+
+        internal bool IsParams => IsParamsArray || IsParamsCollection;
 
         /// <summary>
         /// Returns true if the parameter is semantically optional.
@@ -239,6 +253,13 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         /// (i.e. even non-optional parameters can have default values).
         /// </remarks>
         internal abstract ConstantValue? ExplicitDefaultConstantValue { get; }
+
+        /// <summary>
+        /// Returns the default value from attributes on the parameter,
+        /// for symbols from source or derived from source symbols.
+        /// Returns null when not applicable.
+        /// </summary>
+        internal abstract ConstantValue? DefaultValueFromAttributes { get; }
 
         /// <summary>
         /// Gets the kind of this symbol.
@@ -388,6 +409,10 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
 
         internal abstract bool IsCallerMemberName { get; }
 
+        /// <summary>
+        /// The index of the parameter which the CallerArgumentExpressionAttribute refers to.
+        /// For non-static extension members, index zero refers to the extension parameter (even in error scenarios where it doesn't exist).
+        /// </summary>
         internal abstract int CallerArgumentExpressionParameterIndex { get; }
 
         internal abstract FlowAnalysisAnnotations FlowAnalysisAnnotations { get; }
@@ -416,9 +441,16 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
         /// </summary>
         internal abstract ScopedKind EffectiveScope { get; }
 
+        /// <summary>
+        /// Only valid for parameters declared in source.
+        /// </summary>
+        internal abstract ScopedKind DeclaredScope { get; }
+
         internal abstract bool HasUnscopedRefAttribute { get; }
 
         internal abstract bool UseUpdatedEscapeRules { get; }
+
+        internal sealed override CallerUnsafeMode CallerUnsafeMode => CallerUnsafeMode.None;
 
         protected sealed override bool IsHighestPriorityUseSiteErrorCode(int code) => code is (int)ErrorCode.ERR_UnsupportedCompilerFeature or (int)ErrorCode.ERR_BogusType;
 

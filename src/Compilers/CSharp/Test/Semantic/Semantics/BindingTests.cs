@@ -12,6 +12,7 @@ using Microsoft.CodeAnalysis.Test.Utilities;
 using Roslyn.Test.Utilities;
 using Xunit;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Basic.Reference.Assemblies;
 
 namespace Microsoft.CodeAnalysis.CSharp.UnitTests.Semantics
 {
@@ -638,6 +639,38 @@ class C
                 Diagnostic(ErrorCode.ERR_BadArgType, "o").WithArguments("2", "object", "int").WithLocation(7, 14),
                 // (8,17): error CS1503: Argument 3: cannot convert from 'object' to 'int'
                 Diagnostic(ErrorCode.ERR_BadArgType, "o").WithArguments("3", "object", "int").WithLocation(8, 17));
+        }
+
+        [Fact]
+        public void ChooseExpandedFormIfBadArgCountAndBadArgument_Constructor()
+        {
+            var source =
+@"class C
+{
+    static void M(object o)
+    {
+        _ = new C();
+        _ = new C(o);
+        _ = new C(1, o);
+        _ = new C(1, 2, o);
+    }
+
+    C(int i, params int[] args) { }
+}";
+            CreateCompilation(source).VerifyDiagnostics(
+                // (5,17): error CS7036: There is no argument given that corresponds to the required parameter 'i' of 'C.C(int, params int[])'
+                //         _ = new C();
+                Diagnostic(ErrorCode.ERR_NoCorrespondingArgument, "C").WithArguments("i", "C.C(int, params int[])").WithLocation(5, 17),
+                // (6,19): error CS1503: Argument 1: cannot convert from 'object' to 'int'
+                //         _ = new C(o);
+                Diagnostic(ErrorCode.ERR_BadArgType, "o").WithArguments("1", "object", "int").WithLocation(6, 19),
+                // (7,22): error CS1503: Argument 2: cannot convert from 'object' to 'int'
+                //         _ = new C(1, o);
+                Diagnostic(ErrorCode.ERR_BadArgType, "o").WithArguments("2", "object", "int").WithLocation(7, 22),
+                // (8,25): error CS1503: Argument 3: cannot convert from 'object' to 'int'
+                //         _ = new C(1, 2, o);
+                Diagnostic(ErrorCode.ERR_BadArgType, "o").WithArguments("3", "object", "int").WithLocation(8, 25)
+                );
         }
 
         [Fact]
@@ -1551,7 +1584,7 @@ using System.Runtime.InteropServices;
 public struct ImageMoniker
 { }";
 
-            CSharpCompilation comp1 = CreateCompilationWithMscorlib45(source1, assemblyName: "Pia948674_1");
+            CSharpCompilation comp1 = CreateCompilationWithMscorlib461(source1, assemblyName: "Pia948674_1");
 
             var source2 = @"
 public interface IBar
@@ -1559,7 +1592,7 @@ public interface IBar
     ImageMoniker? Moniker { get; }
 }";
 
-            CSharpCompilation comp2 = CreateCompilationWithMscorlib45(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_1");
+            CSharpCompilation comp2 = CreateCompilationWithMscorlib461(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_1");
 
             var source3 = @"
 public class BarImpl : IBar
@@ -1570,7 +1603,7 @@ public class BarImpl : IBar
     }
 }";
 
-            CSharpCompilation comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
+            CSharpCompilation comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
 
             comp3.VerifyDiagnostics(
     // (2,24): error CS1769: Type 'ImageMoniker?' from assembly 'Bar948674_1, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' cannot be used across assembly boundaries because it has a generic type argument that is an embedded interop type.
@@ -1578,7 +1611,7 @@ public class BarImpl : IBar
     Diagnostic(ErrorCode.ERR_GenericsUsedAcrossAssemblies, "IBar").WithArguments("ImageMoniker?", "Bar948674_1, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null").WithLocation(2, 24)
                 );
 
-            comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
+            comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
 
             comp3.VerifyDiagnostics(
     // (2,24): error CS1769: Type 'ImageMoniker?' from assembly 'Bar948674_1, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' cannot be used across assembly boundaries because it has a generic type argument that is an embedded interop type.
@@ -1604,7 +1637,7 @@ using System.Runtime.InteropServices;
 public struct ImageMoniker
 { }";
 
-            CSharpCompilation comp1 = CreateCompilationWithMscorlib45(source1, assemblyName: "Pia948674_2");
+            CSharpCompilation comp1 = CreateCompilationWithMscorlib461(source1, assemblyName: "Pia948674_2");
 
             var source2 = @"
 public interface IBar
@@ -1612,7 +1645,7 @@ public interface IBar
     ImageMoniker? Moniker { get; }
 }";
 
-            CSharpCompilation comp2 = CreateCompilationWithMscorlib45(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_2");
+            CSharpCompilation comp2 = CreateCompilationWithMscorlib461(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_2");
 
             var source3 = @"
 public class BarImpl : IBar
@@ -1623,23 +1656,23 @@ public class BarImpl : IBar
     }
 }";
 
-            CSharpCompilation comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
+            CSharpCompilation comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
 
             comp3.VerifyDiagnostics(
-    // (4,24): error CS0539: 'BarImpl.Moniker' in explicit interface declaration is not a member of interface
+    // (4,24): error CS9333: 'BarImpl.Moniker': type must be 'Nullable<ImageMoniker>?' to match implemented member 'IBar.Moniker'
     //     ImageMoniker? IBar.Moniker    
-    Diagnostic(ErrorCode.ERR_InterfaceMemberNotFound, "Moniker").WithArguments("BarImpl.Moniker").WithLocation(4, 24),
+    Diagnostic(ErrorCode.ERR_ExplicitInterfaceMemberTypeMismatch, "Moniker").WithArguments("BarImpl.Moniker", "Nullable<ImageMoniker>?", "IBar.Moniker").WithLocation(4, 24),
     // (2,24): error CS1769: Type 'ImageMoniker?' from assembly 'Bar948674_2, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' cannot be used across assembly boundaries because it has a generic type argument that is an embedded interop type.
     // public class BarImpl : IBar
     Diagnostic(ErrorCode.ERR_GenericsUsedAcrossAssemblies, "IBar").WithArguments("ImageMoniker?", "Bar948674_2, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null").WithLocation(2, 24)
                 );
 
-            comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
+            comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
 
             comp3.VerifyDiagnostics(
-    // (4,24): error CS0539: 'BarImpl.Moniker' in explicit interface declaration is not a member of interface
+    // (4,24): error CS9333: 'BarImpl.Moniker': type must be 'Nullable<ImageMoniker>' to match implemented member 'IBar.Moniker'
     //     ImageMoniker? IBar.Moniker    
-    Diagnostic(ErrorCode.ERR_InterfaceMemberNotFound, "Moniker").WithArguments("BarImpl.Moniker").WithLocation(4, 24),
+    Diagnostic(ErrorCode.ERR_ExplicitInterfaceMemberTypeMismatch, "Moniker").WithArguments("BarImpl.Moniker", "Nullable<ImageMoniker>", "IBar.Moniker").WithLocation(4, 24),
     // (2,24): error CS1769: Type 'ImageMoniker?' from assembly 'Bar948674_2, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' cannot be used across assembly boundaries because it has a generic type argument that is an embedded interop type.
     // public class BarImpl : IBar
     Diagnostic(ErrorCode.ERR_GenericsUsedAcrossAssemblies, "IBar").WithArguments("ImageMoniker?", "Bar948674_2, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null").WithLocation(2, 24)
@@ -1660,7 +1693,7 @@ using System.Runtime.InteropServices;
 public struct ImageMoniker
 { }";
 
-            CSharpCompilation comp1 = CreateCompilationWithMscorlib45(source1, assemblyName: "Pia948674_3");
+            CSharpCompilation comp1 = CreateCompilationWithMscorlib461(source1, assemblyName: "Pia948674_3");
 
             var source2 = @"
 public interface IBar
@@ -1668,7 +1701,7 @@ public interface IBar
     void SetMoniker(ImageMoniker? moniker);
 }";
 
-            CSharpCompilation comp2 = CreateCompilationWithMscorlib45(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_3");
+            CSharpCompilation comp2 = CreateCompilationWithMscorlib461(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_3");
 
             var source3 = @"
 public class BarImpl : IBar
@@ -1677,7 +1710,7 @@ public class BarImpl : IBar
     {}
 }";
 
-            CSharpCompilation comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
+            CSharpCompilation comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
 
             comp3.VerifyDiagnostics(
     // (2,24): error CS1769: Type 'ImageMoniker?' from assembly 'Bar948674_3, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' cannot be used across assembly boundaries because it has a generic type argument that is an embedded interop type.
@@ -1685,7 +1718,7 @@ public class BarImpl : IBar
     Diagnostic(ErrorCode.ERR_GenericsUsedAcrossAssemblies, "IBar").WithArguments("ImageMoniker?", "Bar948674_3, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null").WithLocation(2, 24)
                 );
 
-            comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
+            comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
 
             comp3.VerifyDiagnostics(
     // (2,24): error CS1769: Type 'ImageMoniker?' from assembly 'Bar948674_3, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null' cannot be used across assembly boundaries because it has a generic type argument that is an embedded interop type.
@@ -1708,7 +1741,7 @@ using System.Runtime.InteropServices;
 public struct ImageMoniker
 { }";
 
-            CSharpCompilation comp1 = CreateCompilationWithMscorlib45(source1, assemblyName: "Pia948674_4");
+            CSharpCompilation comp1 = CreateCompilationWithMscorlib461(source1, assemblyName: "Pia948674_4");
 
             var source2 = @"
 public interface IBar
@@ -1716,7 +1749,7 @@ public interface IBar
     void SetMoniker(ImageMoniker? moniker);
 }";
 
-            CSharpCompilation comp2 = CreateCompilationWithMscorlib45(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_4");
+            CSharpCompilation comp2 = CreateCompilationWithMscorlib461(source2, new MetadataReference[] { new CSharpCompilationReference(comp1, embedInteropTypes: true) }, assemblyName: "Bar948674_4");
 
             var source3 = @"
 public class BarImpl : IBar
@@ -1725,7 +1758,7 @@ public class BarImpl : IBar
     {}
 }";
 
-            CSharpCompilation comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
+            CSharpCompilation comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { new CSharpCompilationReference(comp2), new CSharpCompilationReference(comp1, embedInteropTypes: true) });
 
             comp3.VerifyDiagnostics(
     // (4,15): error CS0539: 'BarImpl.SetMoniker(ImageMoniker?)' in explicit interface declaration is not a member of interface
@@ -1736,7 +1769,7 @@ public class BarImpl : IBar
     Diagnostic(ErrorCode.ERR_GenericsUsedAcrossAssemblies, "IBar").WithArguments("ImageMoniker?", "Bar948674_4, Version=0.0.0.0, Culture=neutral, PublicKeyToken=null").WithLocation(2, 24)
                 );
 
-            comp3 = CreateCompilationWithMscorlib45(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
+            comp3 = CreateCompilationWithMscorlib461(source3, new MetadataReference[] { comp2.EmitToImageReference(), comp1.EmitToImageReference().WithEmbedInteropTypes(true) });
 
             comp3.VerifyDiagnostics(
     // (4,15): error CS0539: 'BarImpl.SetMoniker(ImageMoniker?)' in explicit interface declaration is not a member of interface
@@ -1800,9 +1833,9 @@ class C
                 // (20,27): error CS0305: Using the generic type 'N.A<T>' requires '1' type arguments
                 // 
                 Diagnostic(ErrorCode.ERR_BadArity, "A").WithArguments("N.A<T>", "type", "1"),
-                // (21,34): error CS0308: The non-generic type 'N.B' cannot be used with type arguments
+                // (21,34): error CS0305: Using the generic type 'N.B<T1, T2>' requires '2' type arguments
                 // 
-                Diagnostic(ErrorCode.ERR_HasNoTypeVars, "B<int>").WithArguments("N.B", "type")
+                Diagnostic(ErrorCode.ERR_BadArity, "B<int>").WithArguments("N.B<T1, T2>", "type", "2")
                 );
         }
 
@@ -2178,12 +2211,12 @@ class C<T> : System.Attribute { }";
     partial void I.M();
 }";
             CreateCompilation(source, parseOptions: TestOptions.Regular7, targetFramework: TargetFramework.NetCoreApp).VerifyDiagnostics(
-                // (3,20): error CS0754: A partial method may not explicitly implement an interface method
+                // (3,20): error CS0754: A partial member may not explicitly implement an interface member
                 //     partial void I.M();
-                Diagnostic(ErrorCode.ERR_PartialMethodNotExplicit, "M").WithLocation(3, 20),
-                // (3,20): error CS0751: A partial method must be declared within a partial type
+                Diagnostic(ErrorCode.ERR_PartialMemberNotExplicit, "M").WithLocation(3, 20),
+                // (3,20): error CS0751: A partial member must be declared within a partial type
                 //     partial void I.M();
-                Diagnostic(ErrorCode.ERR_PartialMethodOnlyInPartialClass, "M").WithLocation(3, 20),
+                Diagnostic(ErrorCode.ERR_PartialMemberOnlyInPartialClass, "M").WithLocation(3, 20),
                 // (3,20): error CS8652: The feature 'default interface implementation' is not available in C# 7.0. Please use language version 8.0 or greater.
                 //     partial void I.M();
                 Diagnostic(ErrorCode.ERR_FeatureNotAvailableInVersion7, "M").WithArguments("default interface implementation", "8.0").WithLocation(3, 20),
@@ -2378,7 +2411,7 @@ class C
 }
 ";
 
-            CreateCompilationWithMscorlib45(text).VerifyDiagnostics();
+            CreateCompilationWithMscorlib461(text).VerifyDiagnostics();
         }
 
         [Fact]
@@ -2403,12 +2436,12 @@ class C
 }
 ";
 
-            CreateCompilationWithMscorlib45(text, parseOptions: TestOptions.WithoutImprovedOverloadCandidates).VerifyDiagnostics(
+            CreateCompilationWithMscorlib461(text, parseOptions: TestOptions.WithoutImprovedOverloadCandidates).VerifyDiagnostics(
                 // (15,15): error CS8189: Ref mismatch between 'C.M()' and delegate 'D'
                 //         new D(M)();
                 Diagnostic(ErrorCode.ERR_DelegateRefMismatch, "M").WithArguments("C.M()", "D").WithLocation(15, 15)
                 );
-            CreateCompilationWithMscorlib45(text).VerifyDiagnostics(
+            CreateCompilationWithMscorlib461(text).VerifyDiagnostics(
                 // (15,15): error CS8189: Ref mismatch between 'C.M()' and delegate 'D'
                 //         new D(M)();
                 Diagnostic(ErrorCode.ERR_DelegateRefMismatch, "M").WithArguments("C.M()", "D").WithLocation(15, 15)
@@ -2441,7 +2474,7 @@ class C
 }
 ";
 
-            CreateCompilationWithMscorlib45(text).VerifyDiagnostics();
+            CreateCompilationWithMscorlib461(text).VerifyDiagnostics();
         }
 
         [Fact]
@@ -2470,12 +2503,12 @@ class C
 }
 ";
 
-            CreateCompilationWithMscorlib45(text, parseOptions: TestOptions.WithoutImprovedOverloadCandidates).VerifyDiagnostics(
+            CreateCompilationWithMscorlib461(text, parseOptions: TestOptions.WithoutImprovedOverloadCandidates).VerifyDiagnostics(
                 // (19,11): error CS8189: Ref mismatch between 'C.M()' and delegate 'D'
                 //         M(M);
                 Diagnostic(ErrorCode.ERR_DelegateRefMismatch, "M").WithArguments("C.M()", "D").WithLocation(19, 11)
                 );
-            CreateCompilationWithMscorlib45(text).VerifyDiagnostics(
+            CreateCompilationWithMscorlib461(text).VerifyDiagnostics(
                 // (19,11): error CS8189: Ref mismatch between 'C.M()' and delegate 'D'
                 //         M(M);
                 Diagnostic(ErrorCode.ERR_DelegateRefMismatch, "M").WithArguments("C.M()", "D").WithLocation(19, 11)
@@ -2839,7 +2872,7 @@ public static class LazyToStringExtension
             .Select(x => x.GetValue(obj))
     }
 }";
-            var compilation = CreateCompilationWithMscorlib40(sourceText, new[] { TestMetadata.Net40.SystemCore }, options: TestOptions.DebugDll);
+            var compilation = CreateCompilationWithMscorlib40(sourceText, new[] { Net40.References.SystemCore }, options: TestOptions.DebugDll);
             compilation.VerifyDiagnostics(
                 // (12,42): error CS1002: ; expected
                 //             .Select(x => x.GetValue(obj))
@@ -2990,7 +3023,7 @@ class C
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib40(source, new[] { TestMetadata.Net40.SystemCore });
+            var comp = CreateCompilationWithMscorlib40(source, new[] { Net40.References.SystemCore });
 
             comp.VerifyDiagnostics(
     // (41,38): error CS7036: There is no argument given that corresponds to the required parameter 'authenticationScheme' of 'AuthenticationManager.AuthenticateAsync(string)'
@@ -3070,7 +3103,7 @@ class C
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib40(source, new[] { TestMetadata.Net40.SystemCore });
+            var comp = CreateCompilationWithMscorlib40(source, new[] { Net40.References.SystemCore });
 
             comp.VerifyDiagnostics(
     // (41,38): error CS7036: There is no argument given that corresponds to the required parameter 'authenticationScheme' of 'AuthenticationManager.AuthenticateAsync(string)'
@@ -3228,7 +3261,7 @@ class C
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib40(source, new[] { TestMetadata.Net40.SystemCore });
+            var comp = CreateCompilationWithMscorlib40(source, new[] { Net40.References.SystemCore });
 
             comp.VerifyDiagnostics(
     // (41,38): error CS7036: There is no argument given that corresponds to the required parameter 'authenticationScheme' of 'AuthenticationManager.AuthenticateAsync(string)'
@@ -3327,7 +3360,7 @@ static class Extension2
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
     // (16,9): error CS0103: The name 'MathMin' does not exist in the current context
@@ -3389,7 +3422,7 @@ internal class AnyClass : AnyBaseClass
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
@@ -3421,7 +3454,7 @@ internal class AnyClass : AnyBaseClass
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
@@ -3454,7 +3487,7 @@ internal class AnyClass : AnyBaseClass
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
@@ -3489,7 +3522,7 @@ internal class AnyClass : AnyBaseClass
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
@@ -3521,7 +3554,7 @@ internal class AnyClass : AnyBaseClass
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
@@ -3553,7 +3586,7 @@ internal class AnyClass : AnyBaseClass
     }
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
@@ -3583,7 +3616,7 @@ internal class AnyClass : AnyBaseClass
     internal delegate void AnyEnum();
 }
 ";
-            var comp = CreateCompilationWithMscorlib45(source);
+            var comp = CreateCompilationWithMscorlib461(source);
 
             comp.VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
@@ -3606,7 +3639,7 @@ using static Test<System.String>;
 
 public static class Test<T> where T : struct { }
 ";
-            CreateCompilationWithMscorlib45(code).VerifyDiagnostics(
+            CreateCompilationWithMscorlib461(code).VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
                 // using static Test<System.String>;
                 Diagnostic(ErrorCode.HDN_UnusedUsingDirective, "using static Test<System.String>;").WithLocation(2, 1),
@@ -3626,7 +3659,7 @@ class A<T> where T : class
     internal static class B { }
 }
 ";
-            CreateCompilationWithMscorlib45(code).VerifyDiagnostics(
+            CreateCompilationWithMscorlib461(code).VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
                 // using static A<A<int>[]>.B;
                 Diagnostic(ErrorCode.HDN_UnusedUsingDirective, "using static A<A<int>[]>.B;").WithLocation(2, 1),
@@ -3642,7 +3675,7 @@ class A<T> where T : class
 using static A<int, string>;
 static class A<T, U> where T : class where U : struct { }
 ";
-            CreateCompilationWithMscorlib45(code).VerifyDiagnostics(
+            CreateCompilationWithMscorlib461(code).VerifyDiagnostics(
                 // (2,1): hidden CS8019: Unnecessary using directive.
                 // using static A<int, string>;
                 Diagnostic(ErrorCode.HDN_UnusedUsingDirective, "using static A<int, string>;").WithLocation(2, 1),
@@ -3928,6 +3961,444 @@ public class MainVersion
 }
 ");
             CompileAndVerify(compilation).VerifyDiagnostics();
+        }
+
+        [Fact]
+        public void ElseIf_01()
+        {
+            var source =
+@"
+class Program
+{
+    static void M(bool a, bool b)
+    {
+        if (a)
+        {}
+        else if (b)
+        {}
+    }
+}";
+            var comp = CreateCompilation(source);
+
+            var tree = comp.SyntaxTrees[0];
+            var model = comp.GetSemanticModel(tree);
+            var ids = tree.GetRoot().DescendantNodes().OfType<IdentifierNameSyntax>().ToArray();
+
+            var id = ids[1];
+
+            Assert.Equal("b", id.ToString());
+            Assert.Equal("System.Boolean b", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+
+            id = ids[0];
+
+            Assert.Equal("a", id.ToString());
+            Assert.Equal("System.Boolean a", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+
+            model = comp.GetSemanticModel(tree);
+            Assert.Equal("System.Boolean a", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+
+            id = ids[1];
+            Assert.Equal("System.Boolean b", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+        }
+
+        [Fact]
+        public void ElseIf_02()
+        {
+            var source =
+@"
+class Program
+{
+    static void M(bool a, object b)
+    {
+        if (a)
+        {}
+        else if (b is bool bb && bb)
+        {
+            bb = false;
+        }
+    }
+}";
+            var comp = CreateCompilation(source);
+            CompileAndVerify(comp).VerifyDiagnostics();
+
+            var tree = comp.SyntaxTrees[0];
+            var model = comp.GetSemanticModel(tree);
+            var ids = tree.GetRoot().DescendantNodes().OfType<IdentifierNameSyntax>().ToArray();
+
+            var id = ids[1];
+
+            Assert.Equal("b", id.ToString());
+            Assert.Equal("System.Object b", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+
+            id = ids[0];
+
+            Assert.Equal("a", id.ToString());
+            Assert.Equal("System.Boolean a", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+
+            var ifStmt = tree.GetRoot().DescendantNodes().OfType<IfStatementSyntax>().First();
+
+            var operationString = @"
+IConditionalOperation (OperationKind.Conditional, Type: null) (Syntax: 'if (a) ... }')
+  Condition:
+    IParameterReferenceOperation: a (OperationKind.ParameterReference, Type: System.Boolean) (Syntax: 'a')
+  WhenTrue:
+    IBlockOperation (0 statements) (OperationKind.Block, Type: null) (Syntax: '{}')
+  WhenFalse:
+    IBlockOperation (1 statements, 1 locals) (OperationKind.Block, Type: null, IsImplicit) (Syntax: 'if (b is bo ... }')
+      Locals: Local_1: System.Boolean bb
+      IConditionalOperation (OperationKind.Conditional, Type: null) (Syntax: 'if (b is bo ... }')
+        Condition:
+          IBinaryOperation (BinaryOperatorKind.ConditionalAnd) (OperationKind.Binary, Type: System.Boolean) (Syntax: 'b is bool bb && bb')
+            Left:
+              IIsPatternOperation (OperationKind.IsPattern, Type: System.Boolean) (Syntax: 'b is bool bb')
+                Value:
+                  IParameterReferenceOperation: b (OperationKind.ParameterReference, Type: System.Object) (Syntax: 'b')
+                Pattern:
+                  IDeclarationPatternOperation (OperationKind.DeclarationPattern, Type: null) (Syntax: 'bool bb') (InputType: System.Object, NarrowedType: System.Boolean, DeclaredSymbol: System.Boolean bb, MatchesNull: False)
+            Right:
+              ILocalReferenceOperation: bb (OperationKind.LocalReference, Type: System.Boolean) (Syntax: 'bb')
+        WhenTrue:
+          IBlockOperation (1 statements) (OperationKind.Block, Type: null) (Syntax: '{ ... }')
+            IExpressionStatementOperation (OperationKind.ExpressionStatement, Type: null) (Syntax: 'bb = false;')
+              Expression:
+                ISimpleAssignmentOperation (OperationKind.SimpleAssignment, Type: System.Boolean) (Syntax: 'bb = false')
+                  Left:
+                    ILocalReferenceOperation: bb (OperationKind.LocalReference, Type: System.Boolean) (Syntax: 'bb')
+                  Right:
+                    ILiteralOperation (OperationKind.Literal, Type: System.Boolean, Constant: False) (Syntax: 'false')
+        WhenFalse:
+          null
+";
+
+            VerifyOperationTree(comp, model.GetOperation(ifStmt), operationString);
+
+            model = comp.GetSemanticModel(tree);
+            Assert.Equal("System.Boolean a", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+
+            id = ids[1];
+            Assert.Equal("System.Object b", model.GetSymbolInfo(id).Symbol.ToTestDisplayString());
+
+            VerifyOperationTree(comp, model.GetOperation(ifStmt), operationString);
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestGenericAndNonGenericType()
+        {
+            var text = """
+                class MyExpression { }
+                class MyExpression<T> { }
+
+                class Test
+                {
+                    void M()
+                    {
+                        MyExpression<int, string> x;
+                    }
+                }
+                """;
+
+            CreateCompilation(text).VerifyDiagnostics(
+                // (8,9): error CS0305: Using the generic type 'MyExpression<T>' requires 1 type arguments
+                //         MyExpression<int, string> x;
+                Diagnostic(ErrorCode.ERR_BadArity, "MyExpression<int, string>").WithArguments("MyExpression<T>", "type", "1").WithLocation(8, 9),
+                // (8,35): warning CS0168: The variable 'x' is declared but never used
+                //         MyExpression<int, string> x;
+                Diagnostic(ErrorCode.WRN_UnreferencedVar, "x").WithArguments("x").WithLocation(8, 35));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestGenericAndNonGenericType_SingleTypeArgument()
+        {
+            var text = """
+                class MyExpression { }
+                class MyExpression<T> { }
+
+                class Test
+                {
+                    void M()
+                    {
+                        MyExpression<int> x = null;
+                    }
+                }
+                """;
+
+            CreateCompilation(text).VerifyDiagnostics(
+                // (8,27): warning CS0219: The variable 'x' is assigned but its value is never used
+                //         MyExpression<int> x = null;
+                Diagnostic(ErrorCode.WRN_UnreferencedVarAssg, "x").WithArguments("x").WithLocation(8, 27));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestNonGenericTypeOnly()
+        {
+            var text = """
+                class MyExpression { }
+
+                class Test
+                {
+                    void M()
+                    {
+                        MyExpression<int> x;
+                    }
+                }
+                """;
+
+            CreateCompilation(text).VerifyDiagnostics(
+                // (7,9): error CS0308: The non-generic type 'MyExpression' cannot be used with type arguments
+                //         MyExpression<int> x;
+                Diagnostic(ErrorCode.ERR_HasNoTypeVars, "MyExpression<int>").WithArguments("MyExpression", "type").WithLocation(7, 9),
+                // (7,27): warning CS0168: The variable 'x' is declared but never used
+                //         MyExpression<int> x;
+                Diagnostic(ErrorCode.WRN_UnreferencedVar, "x").WithArguments("x").WithLocation(7, 27));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestGenericTypeOnly()
+        {
+            var text = """
+                class MyExpression<T> { }
+
+                class Test
+                {
+                    void M()
+                    {
+                        MyExpression<int, string> x;
+                    }
+                }
+                """;
+
+            CreateCompilation(text).VerifyDiagnostics(
+                // (7,9): error CS0305: Using the generic type 'MyExpression<T>' requires 1 type arguments
+                //         MyExpression<int, string> x;
+                Diagnostic(ErrorCode.ERR_BadArity, "MyExpression<int, string>").WithArguments("MyExpression<T>", "type", "1").WithLocation(7, 9),
+                // (7,35): warning CS0168: The variable 'x' is declared but never used
+                //         MyExpression<int, string> x;
+                Diagnostic(ErrorCode.WRN_UnreferencedVar, "x").WithArguments("x").WithLocation(7, 35));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestMultipleGenericTypes()
+        {
+            var text = """
+                class MyExpression { }
+                class MyExpression<T> { }
+                class MyExpression<T1, T2> { }
+
+                class Test
+                {
+                    void M()
+                    {
+                        MyExpression<int, string, bool> x;
+                    }
+                }
+                """;
+
+            CreateCompilation(text).VerifyDiagnostics(
+                // (9,9): error CS0305: Using the generic type 'MyExpression<T>' requires 1 type arguments
+                //         MyExpression<int, string, bool> x;
+                Diagnostic(ErrorCode.ERR_BadArity, "MyExpression<int, string, bool>").WithArguments("MyExpression<T>", "type", "1").WithLocation(9, 9),
+                // (9,41): warning CS0168: The variable 'x' is declared but never used
+                //         MyExpression<int, string, bool> x;
+                Diagnostic(ErrorCode.WRN_UnreferencedVar, "x").WithArguments("x").WithLocation(9, 41));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestGenericTypeWithNoTypeArguments()
+        {
+            var text = """
+                class MyExpression { }
+                class MyExpression<T> { }
+
+                class Test
+                {
+                    void M()
+                    {
+                        MyExpression x;
+                    }
+                }
+                """;
+
+            // When both generic and non-generic versions exist and no type arguments are provided,
+            // the non-generic version is successfully used (no error expected)
+            CreateCompilation(text).VerifyDiagnostics(
+                // (8,22): warning CS0168: The variable 'x' is declared but never used
+                //         MyExpression x;
+                Diagnostic(ErrorCode.WRN_UnreferencedVar, "x").WithArguments("x").WithLocation(8, 22));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestGenericTypeOnlyWithNoTypeArguments()
+        {
+            var text = """
+                class MyExpression<T> { }
+
+                class Test
+                {
+                    void M()
+                    {
+                        MyExpression x;
+                    }
+                }
+                """;
+
+            // When only a generic type exists and no type arguments are provided,
+            // an error is reported about the required type arguments
+            CreateCompilation(text).VerifyDiagnostics(
+                // (7,9): error CS0305: Using the generic type 'MyExpression<T>' requires 1 type arguments
+                //         MyExpression x;
+                Diagnostic(ErrorCode.ERR_BadArity, "MyExpression").WithArguments("MyExpression<T>", "type", "1").WithLocation(7, 9),
+                // (7,22): warning CS0168: The variable 'x' is declared but never used
+                //         MyExpression x;
+                Diagnostic(ErrorCode.WRN_UnreferencedVar, "x").WithArguments("x").WithLocation(7, 22));
+        }
+
+        [Fact, WorkItem("https://github.com/dotnet/roslyn/issues/24406")]
+        public void TestGenericAndNonGenericMethod()
+        {
+            var text = """
+                class Program
+                {
+                    static void Main()
+                    {
+                        M<int>(default!); 
+                    }
+
+                    void M(object obj) { }
+                    T2 M<T1, T2>(T1 t) => throw null!;
+                }
+                """;
+
+            CreateCompilation(text).VerifyEmitDiagnostics(
+                // (5,9): error CS0305: Using the generic method 'Program.M<T1, T2>(T1)' requires 2 type arguments
+                //         M<int>(default!); 
+                Diagnostic(ErrorCode.ERR_BadArity, "M<int>").WithArguments("Program.M<T1, T2>(T1)", "method", "2").WithLocation(5, 9));
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/80987")]
+        public void MissingCoreReference_01()
+        {
+            var source =
+@"
+namespace Magic
+{
+    public enum Cookie : UInt32;
+}
+";
+            var comp = CreateEmptyCompilation(source);
+            comp.VerifyDiagnostics(
+                // (4,17): error CS0518: Predefined type 'System.Enum' is not defined or imported
+                //     public enum Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "Cookie").WithArguments("System.Enum").WithLocation(4, 17),
+                // (4,26): error CS0518: Predefined type 'System.Enum' is not defined or imported
+                //     public enum Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "UInt32").WithArguments("System.Enum").WithLocation(4, 26),
+                // (4,26): error CS0518: Predefined type 'System.Object' is not defined or imported
+                //     public enum Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "UInt32").WithArguments("System.Object").WithLocation(4, 26),
+                // (4,26): error CS0246: The type or namespace name 'UInt32' could not be found (are you missing a using directive or an assembly reference?)
+                //     public enum Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_SingleTypeNameNotFound, "UInt32").WithArguments("UInt32").WithLocation(4, 26),
+                // (4,26): error CS1008: Type byte, sbyte, short, ushort, int, uint, long, or ulong expected
+                //     public enum Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_IntegralTypeExpected, "UInt32").WithLocation(4, 26)
+                );
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/80987")]
+        public void MissingCoreReference_02()
+        {
+            var source =
+@"
+namespace Magic
+{
+    public enum Cookie : int;
+}
+";
+            var comp = CreateEmptyCompilation(source);
+            comp.VerifyDiagnostics(
+                // (4,17): error CS0518: Predefined type 'System.Enum' is not defined or imported
+                //     public enum Cookie : int;
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "Cookie").WithArguments("System.Enum").WithLocation(4, 17),
+                // (4,26): error CS0518: Predefined type 'System.Int32' is not defined or imported
+                //     public enum Cookie : int;
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "int").WithArguments("System.Int32").WithLocation(4, 26)
+                );
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/80987")]
+        public void MissingCoreReference_03()
+        {
+            var source =
+@"
+namespace Magic
+{
+    public class Cookie : UInt32;
+}
+";
+            var comp = CreateEmptyCompilation(source);
+            comp.VerifyDiagnostics(
+                // (4,27): error CS0246: The type or namespace name 'UInt32' could not be found (are you missing a using directive or an assembly reference?)
+                //     public class Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_SingleTypeNameNotFound, "UInt32").WithArguments("UInt32").WithLocation(4, 27)
+                );
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/80987")]
+        public void MissingCoreReference_04()
+        {
+            var source =
+@"
+namespace Magic
+{
+    public struct Cookie : UInt32;
+}
+";
+            var comp = CreateEmptyCompilation(source);
+            comp.VerifyDiagnostics(
+                // (4,19): error CS0518: Predefined type 'System.ValueType' is not defined or imported
+                //     public struct Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "Cookie").WithArguments("System.ValueType").WithLocation(4, 19),
+                // (4,28): error CS0246: The type or namespace name 'UInt32' could not be found (are you missing a using directive or an assembly reference?)
+                //     public struct Cookie : UInt32;
+                Diagnostic(ErrorCode.ERR_SingleTypeNameNotFound, "UInt32").WithArguments("UInt32").WithLocation(4, 28)
+                );
+        }
+
+        [Fact]
+        [WorkItem("https://github.com/dotnet/roslyn/issues/80987")]
+        public void MissingCoreReference_05()
+        {
+            var source =
+@"
+static class Ext
+{
+    extension(Ext)
+    {
+    }
+}
+";
+            var comp = CreateEmptyCompilation(source);
+            comp.VerifyDiagnostics(
+                // (2,14): error CS0518: Predefined type 'System.Object' is not defined or imported
+                // static class Ext
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "Ext").WithArguments("System.Object").WithLocation(2, 14),
+                // (4,5): error CS0518: Predefined type 'System.Object' is not defined or imported
+                //     extension(Ext)
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "extension").WithArguments("System.Object").WithLocation(4, 5),
+                // (4,5): error CS1110: Cannot define a new extension because the compiler required type 'System.Runtime.CompilerServices.ExtensionAttribute' cannot be found. Are you missing a reference to System.Core.dll?
+                //     extension(Ext)
+                Diagnostic(ErrorCode.ERR_ExtensionAttrNotFound, "extension").WithArguments("System.Runtime.CompilerServices.ExtensionAttribute").WithLocation(4, 5),
+                // (4,14): error CS0518: Predefined type 'System.Void' is not defined or imported
+                //     extension(Ext)
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "(").WithArguments("System.Void").WithLocation(4, 14),
+                // (4,15): error CS0518: Predefined type 'System.Object' is not defined or imported
+                //     extension(Ext)
+                Diagnostic(ErrorCode.ERR_PredefinedTypeNotFound, "Ext").WithArguments("System.Object").WithLocation(4, 15)
+                );
         }
     }
 }

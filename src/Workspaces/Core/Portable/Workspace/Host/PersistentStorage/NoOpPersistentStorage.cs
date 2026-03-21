@@ -11,93 +11,80 @@ using Roslyn.Utilities;
 
 namespace Microsoft.CodeAnalysis.Host;
 
-internal class NoOpPersistentStorage : IChecksummedPersistentStorage
+internal sealed class NoOpPersistentStorage(SolutionKey solutionKey) : IChecksummedPersistentStorage
 {
-    private static readonly IChecksummedPersistentStorage Instance = new NoOpPersistentStorage();
+    public SolutionKey SolutionKey => solutionKey;
 
-    private NoOpPersistentStorage()
-    {
-    }
-
-    public static IChecksummedPersistentStorage GetOrThrow(bool throwOnFailure)
+    public static IChecksummedPersistentStorage GetOrThrow(SolutionKey solutionKey, bool throwOnFailure)
         => throwOnFailure
             ? throw new InvalidOperationException("Database was not supported")
-            : Instance;
+            : new NoOpPersistentStorage(solutionKey);
 
-    public void Dispose()
-    {
-    }
+    public async Task<bool> ChecksumMatchesAsync(string name, Checksum checksum, CancellationToken cancellationToken)
+        => false;
 
-    public ValueTask DisposeAsync()
-    {
-        return ValueTaskFactory.CompletedTask;
-    }
+    public async Task<bool> ChecksumMatchesAsync(Project project, string name, Checksum checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> ChecksumMatchesAsync(string name, Checksum checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> ChecksumMatchesAsync(Document document, string name, Checksum checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> ChecksumMatchesAsync(Project project, string name, Checksum checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> ChecksumMatchesAsync(ProjectKey project, string name, Checksum checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> ChecksumMatchesAsync(Document document, string name, Checksum checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> ChecksumMatchesAsync(DocumentKey document, string name, Checksum checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> ChecksumMatchesAsync(ProjectKey project, string name, Checksum checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<Stream?> ReadStreamAsync(Document document, string name, CancellationToken cancellationToken)
+        => null;
 
-    public Task<bool> ChecksumMatchesAsync(DocumentKey document, string name, Checksum checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<Stream?> ReadStreamAsync(Project project, string name, CancellationToken cancellationToken)
+        => null;
 
-    public Task<Stream?> ReadStreamAsync(Document document, string name, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<Stream?> ReadStreamAsync(string name, CancellationToken cancellationToken)
+        => null;
 
-    public Task<Stream?> ReadStreamAsync(Project project, string name, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<Stream?> ReadStreamAsync(string name, Checksum? checksum, CancellationToken cancellationToken)
+        => null;
 
-    public Task<Stream?> ReadStreamAsync(string name, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<Stream?> ReadStreamAsync(Project project, string name, Checksum? checksum, CancellationToken cancellationToken)
+        => null;
 
-    public Task<Stream?> ReadStreamAsync(string name, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<Stream?> ReadStreamAsync(Document document, string name, Checksum? checksum, CancellationToken cancellationToken)
+        => null;
 
-    public Task<Stream?> ReadStreamAsync(Project project, string name, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<Stream?> ReadStreamAsync(ProjectKey project, string name, Checksum? checksum, CancellationToken cancellationToken)
+        => null;
 
-    public Task<Stream?> ReadStreamAsync(Document document, string name, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<Stream?> ReadStreamAsync(DocumentKey document, string name, Checksum? checksum, CancellationToken cancellationToken)
+        => null;
 
-    public Task<Stream?> ReadStreamAsync(ProjectKey project, string name, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<bool> WriteStreamAsync(Document document, string name, Stream stream, CancellationToken cancellationToken)
+        => false;
 
-    public Task<Stream?> ReadStreamAsync(DocumentKey document, string name, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.Null<Stream>();
+    public async Task<bool> WriteStreamAsync(Project project, string name, Stream stream, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> WriteStreamAsync(Document document, string name, Stream stream, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> WriteStreamAsync(string name, Stream stream, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> WriteStreamAsync(Project project, string name, Stream stream, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> WriteStreamAsync(string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> WriteStreamAsync(string name, Stream stream, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> WriteStreamAsync(Project project, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> WriteStreamAsync(string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> WriteStreamAsync(Document document, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> WriteStreamAsync(Project project, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> WriteStreamAsync(ProjectKey projectKey, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
+        => false;
 
-    public Task<bool> WriteStreamAsync(Document document, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
-
-    public Task<bool> WriteStreamAsync(ProjectKey projectKey, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
-
-    public Task<bool> WriteStreamAsync(DocumentKey documentKey, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
-        => SpecializedTasks.False;
+    public async Task<bool> WriteStreamAsync(DocumentKey documentKey, string name, Stream stream, Checksum? checksum, CancellationToken cancellationToken)
+        => false;
 
     public readonly struct TestAccessor
     {
-        public static readonly IChecksummedPersistentStorage StorageInstance = Instance;
+        public static IChecksummedPersistentStorage GetStorageInstance(SolutionKey solutionKey) => new NoOpPersistentStorage(solutionKey);
     }
 }

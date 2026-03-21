@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Formatting;
 using Microsoft.CodeAnalysis.Formatting.Rules;
+using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.Shared.Extensions;
 
 namespace Microsoft.CodeAnalysis.CSharp.Formatting;
@@ -38,7 +39,7 @@ internal sealed class QueryExpressionFormattingRule : BaseFormattingRule
         return new QueryExpressionFormattingRule(newOptions);
     }
 
-    public override void AddSuppressOperations(List<SuppressOperation> list, SyntaxNode node, in NextSuppressOperationAction nextOperation)
+    public override void AddSuppressOperations(ArrayBuilder<SuppressOperation> list, SyntaxNode node, in NextSuppressOperationAction nextOperation)
     {
         nextOperation.Invoke();
 
@@ -100,7 +101,26 @@ internal sealed class QueryExpressionFormattingRule : BaseFormattingRule
             var endToken = queryExpression.GetLastToken(includeZeroWidth: true);
             if (!baseToken.IsMissing && !baseToken.Equals(endToken))
             {
-                var startToken = baseToken.GetNextToken(includeZeroWidth: true);
+                SyntaxToken startToken;
+
+                // Determine if the from clause's collection expression is incomplete by checking if the
+                // last token is missing. If incomplete, use the old logic to properly indent the continuation.
+                // If complete, start alignment from the query body to avoid incorrectly indenting comments
+                // between the from clause and subsequent query clauses. A complete expression can span 
+                // multiple lines and may have syntax errors (e.g., "a." expecting member access), but as long 
+                // as it's syntactically closed (e.g., "(a.)"), we consider it complete.
+                var lastToken = queryExpression.FromClause.Expression.GetLastToken(includeZeroWidth: true);
+                if (lastToken.IsMissing)
+                {
+                    // Old behavior: collection expression is incomplete (last token is missing)
+                    startToken = baseToken.GetNextToken(includeZeroWidth: true);
+                }
+                else
+                {
+                    // New behavior: collection expression is complete (even if multi-line or has errors)
+                    startToken = queryExpression.Body.GetFirstToken(includeZeroWidth: true);
+                }
+
                 SetAlignmentBlockOperation(list, baseToken, startToken, endToken);
             }
         }
