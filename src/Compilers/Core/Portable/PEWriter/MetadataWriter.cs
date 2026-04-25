@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -1698,10 +1698,10 @@ namespace Microsoft.Cci
             nativePdbWriterOpt?.SetMetadataEmitter(this);
 
             // TODO: we can precalculate the exact size of IL stream
-            var ilBuilder = new BlobBuilder(1024);
-            var metadataBuilder = new BlobBuilder(4 * 1024);
-            PooledBlobBuilder? mappedFieldDataBuilder = null;
-            PooledBlobBuilder? managedResourceDataBuilder = null;
+            var ilBuilder = PooledBlobBuilder.GetInstance(1024);
+            var metadataBuilder = PooledBlobBuilder.GetInstance(4 * 1024);
+            var mappedFieldDataBuilder = PooledBlobBuilder.GetInstance();
+            var managedResourceDataBuilder = PooledBlobBuilder.GetInstance();
 
             // Add 4B of padding to the start of the separated IL stream,
             // so that method RVAs, which are offsets to this stream, are never 0.
@@ -1716,8 +1716,8 @@ namespace Microsoft.Cci
             BuildMetadataAndIL(
                 nativePdbWriterOpt,
                 ilBuilder,
-                out mappedFieldDataBuilder,
-                out managedResourceDataBuilder,
+                mappedFieldDataBuilder,
+                managedResourceDataBuilder,
                 out Blob mvidFixup,
                 out Blob mvidStringFixup);
 
@@ -1726,7 +1726,7 @@ namespace Microsoft.Cci
             Debug.Assert(typeSystemRowCounts[(int)TableIndex.EncMap] == 0);
             PopulateEncTables(typeSystemRowCounts);
 
-            Debug.Assert(managedResourceDataBuilder == null);
+            Debug.Assert(managedResourceDataBuilder.Count == 0);
             Debug.Assert(mvidFixup.IsDefault);
             Debug.Assert(mvidStringFixup.IsDefault);
 
@@ -1750,7 +1750,7 @@ namespace Microsoft.Cci
                 ilBuilder.WriteContentTo(ilStream);
 
                 // in EnC delta FieldRVA data are appended to the IL stream:
-                mappedFieldDataBuilder?.WriteContentTo(ilStream);
+                mappedFieldDataBuilder.WriteContentTo(ilStream);
 
                 metadataBuilder.WriteContentTo(metadataStream);
             }
@@ -1766,7 +1766,7 @@ namespace Microsoft.Cci
                     debugEntryPoint: default(MethodDefinitionHandle),
                     deterministicIdProviderOpt: null);
 
-                var portablePdbBlob = new BlobBuilder();
+                using var portablePdbBlob = PooledBlobBuilder.GetInstance();
                 portablePdbBuilder.Serialize(portablePdbBlob);
 
                 try
@@ -1778,13 +1778,18 @@ namespace Microsoft.Cci
                     throw new SymUnmanagedWriterException(e.Message, e);
                 }
             }
+
+            ilBuilder.Free();
+            metadataBuilder.Free();
+            mappedFieldDataBuilder.Free();
+            managedResourceDataBuilder.Free();
         }
 
         public void BuildMetadataAndIL(
             PdbWriter? nativePdbWriterOpt,
             BlobBuilder ilBuilder,
-            out PooledBlobBuilder? mappedFieldDataBuilder,
-            out PooledBlobBuilder? managedResourceDataBuilder,
+            BlobBuilder mappedFieldDataBuilder,
+            BlobBuilder managedResourceDataBuilder,
             out Blob mvidFixup,
             out Blob mvidStringFixup)
         {
@@ -1857,7 +1862,7 @@ namespace Microsoft.Cci
             // in EnC delta the FieldRVA data is stored to IL stream following all the method bodies:
             int mappedFieldDataStartOffset = IsFullMetadata ? 0 : ilBuilder.Count;
 
-            PopulateTypeSystemTables(methodBodyOffsets, mappedFieldDataStartOffset, out mappedFieldDataBuilder, out managedResourceDataBuilder, dynamicAnalysisData, out mvidFixup);
+            PopulateTypeSystemTables(methodBodyOffsets, mappedFieldDataStartOffset, mappedFieldDataBuilder, managedResourceDataBuilder, dynamicAnalysisData, out mvidFixup);
             dynamicAnalysisData?.Free();
         }
 #nullable disable
@@ -1920,7 +1925,7 @@ namespace Microsoft.Cci
         }
 
 #nullable enable
-        private void PopulateTypeSystemTables(int[] methodBodyOffsets, int mappedFieldDataStartOffset, out PooledBlobBuilder? mappedFieldDataWriter, out PooledBlobBuilder? resourceWriter, BlobBuilder? dynamicAnalysisData, out Blob mvidFixup)
+        private void PopulateTypeSystemTables(int[] methodBodyOffsets, int mappedFieldDataStartOffset, BlobBuilder mappedFieldDataWriter, BlobBuilder resourceWriter, BlobBuilder? dynamicAnalysisData, out Blob mvidFixup)
         {
             var sortedGenericParameters = GetSortedGenericParameters();
 
@@ -1934,13 +1939,13 @@ namespace Microsoft.Cci
             this.PopulateExportedTypeTableRows();
             this.PopulateFieldLayoutTableRows();
             this.PopulateFieldMarshalTableRows();
-            this.PopulateFieldRvaTableRows(mappedFieldDataStartOffset, out mappedFieldDataWriter);
+            this.PopulateFieldRvaTableRows(mappedFieldDataStartOffset, mappedFieldDataWriter);
             this.PopulateFieldTableRows();
             this.PopulateFileTableRows();
             this.PopulateGenericParameters(sortedGenericParameters);
             this.PopulateImplMapTableRows();
             this.PopulateInterfaceImplTableRows();
-            this.PopulateManifestResourceTableRows(out resourceWriter, dynamicAnalysisData);
+            this.PopulateManifestResourceTableRows(resourceWriter, dynamicAnalysisData);
             this.PopulateMemberRefTableRows();
             this.PopulateMethodImplTableRows();
             this.PopulateMethodTableRows(methodBodyOffsets);
@@ -2336,10 +2341,9 @@ namespace Microsoft.Cci
         }
 
 #nullable enable
-        private void PopulateFieldRvaTableRows(int mappedFieldDataStartOffset, out PooledBlobBuilder? mappedFieldDataBuilder)
+        private void PopulateFieldRvaTableRows(int mappedFieldDataStartOffset, BlobBuilder mappedFieldDataBuilder)
         {
-            mappedFieldDataBuilder = null;
-
+            bool seenMappedData = false;
             foreach (IFieldDefinition fieldDef in this.GetFieldDefs())
             {
                 if (fieldDef.MappedData.IsDefault)
@@ -2347,9 +2351,9 @@ namespace Microsoft.Cci
                     continue;
                 }
 
-                if (mappedFieldDataBuilder == null)
+                if (!seenMappedData)
                 {
-                    mappedFieldDataBuilder = PooledBlobBuilder.GetInstance();
+                    seenMappedData = true;
 
                     // insert alignment bytes as needed:
                     var alignedStartOffset = BitArithmeticUtilities.Align(mappedFieldDataStartOffset, ManagedPEBuilder.MappedFieldDataAlignment);
@@ -2520,13 +2524,10 @@ namespace Microsoft.Cci
         }
 
 #nullable enable
-        private void PopulateManifestResourceTableRows(out PooledBlobBuilder? resourceDataWriter, BlobBuilder? dynamicAnalysisData)
+        private void PopulateManifestResourceTableRows(BlobBuilder resourceDataWriter, BlobBuilder? dynamicAnalysisData)
         {
-            resourceDataWriter = null;
-
             if (dynamicAnalysisData != null)
             {
-                resourceDataWriter = PooledBlobBuilder.GetInstance();
                 metadata.AddManifestResource(
                     attributes: ManifestResourceAttributes.Private,
                     name: metadata.GetOrAddString("<DynamicAnalysisData>"),
@@ -2553,20 +2554,19 @@ namespace Microsoft.Cci
                     attributes: resource.IsPublic ? ManifestResourceAttributes.Public : ManifestResourceAttributes.Private,
                     name: GetStringHandleForNameAndCheckLength(resource.Name),
                     implementation: implementation,
-                    offset: writeManagedResourceAndGetOffset(resource, ref resourceDataWriter));
+                    offset: writeManagedResourceAndGetOffset(resource, resourceDataWriter));
             }
 
             // the stream should be aligned:
             Debug.Assert(resourceDataWriter == null || (resourceDataWriter.Count % ManagedPEBuilder.ManagedResourcesDataAlignment) == 0);
 
-            static uint writeManagedResourceAndGetOffset(ManagedResource resource, ref PooledBlobBuilder? resourceWriter)
+            static uint writeManagedResourceAndGetOffset(ManagedResource resource, BlobBuilder resourceWriter)
             {
                 if (resource.ExternalFile != null)
                 {
                     return resource.Offset;
                 }
 
-                resourceWriter ??= PooledBlobBuilder.GetInstance();
                 int result = resourceWriter.Count;
                 resource.WriteData(resourceWriter);
                 return (uint)result;

@@ -1,4 +1,4 @@
-﻿// Licensed to the .NET Foundation under one or more agreements.
+// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -35,31 +35,23 @@ namespace Microsoft.Cci
     {
         internal struct EmitBuilders
         {
-            internal BlobBuilder IlBlobBuilder;
-            internal PooledBlobBuilder? MappedFieldDataBlobBuilder;
-            internal PooledBlobBuilder? ManagedResourceBlobBuilder;
+            internal PooledBlobBuilder IlBlobBuilder;
+            internal PooledBlobBuilder MappedFieldDataBlobBuilder;
+            internal PooledBlobBuilder ManagedResourceBlobBuilder;
             internal PooledBlobBuilder? PortableExecutableBlobBuilder;
             internal PooledBlobBuilder? PortablePdbBlobBuilder;
 
             public EmitBuilders()
             {
-                IlBlobBuilder = new BlobBuilder(32 * 1024);
-                MappedFieldDataBlobBuilder = null;
-                ManagedResourceBlobBuilder = null;
+                IlBlobBuilder = PooledBlobBuilder.GetInstance(32 * 1024);
+                MappedFieldDataBlobBuilder = PooledBlobBuilder.GetInstance();
+                ManagedResourceBlobBuilder = PooledBlobBuilder.GetInstance();
                 PortableExecutableBlobBuilder = null;
                 PortablePdbBlobBuilder = null;
             }
 
             internal void Free()
             {
-                // There is a bug in LinkSuffix / LinkPrefix which causes the ownership to not
-                // transfer when these have Count of 0. To avoid this problem we should not be
-                // creating these builders unless we will actually put content into them.
-                //
-                // https://github.com/dotnet/runtime/issues/99266
-                Debug.Assert(ManagedResourceBlobBuilder == null || ManagedResourceBlobBuilder.Count > 0);
-                Debug.Assert(MappedFieldDataBlobBuilder == null || MappedFieldDataBlobBuilder.Count > 0);
-
                 if (PortableExecutableBlobBuilder is null)
                 {
                     MappedFieldDataBlobBuilder?.Free();
@@ -111,8 +103,8 @@ namespace Microsoft.Cci
             mdWriter.BuildMetadataAndIL(
                 nativePdbWriterOpt,
                 emitBuilders.IlBlobBuilder,
-                out emitBuilders.MappedFieldDataBlobBuilder,
-                out emitBuilders.ManagedResourceBlobBuilder,
+                emitBuilders.MappedFieldDataBlobBuilder,
+                emitBuilders.ManagedResourceBlobBuilder,
                 out mvidFixup,
                 out mvidStringFixup);
 
@@ -207,7 +199,7 @@ namespace Microsoft.Cci
                     new Func<IEnumerable<Blob>, BlobContentId>(content => BlobContentId.FromHash(portablePdbContentHash = CryptographicHashProvider.ComputeHash(context.Module.PdbChecksumAlgorithm, content))) :
                     null;
 
-                emitBuilders.PortablePdbBlobBuilder = PooledBlobBuilder.GetInstance(zero: true);
+                emitBuilders.PortablePdbBlobBuilder = PooledBlobBuilder.GetInstance();
                 var portablePdbBuilder = mdWriter.GetPortablePdbBuilder(metadataRootBuilder.Sizes.RowCounts, debugEntryPointHandle, portablePdbIdProvider);
                 pdbContentId = portablePdbBuilder.Serialize(emitBuilders.PortablePdbBlobBuilder);
                 portablePdbVersion = portablePdbBuilder.FormatVersion;
@@ -238,7 +230,7 @@ namespace Microsoft.Cci
             DebugDirectoryBuilder? debugDirectoryBuilder;
             if (pdbPathOpt != null || isDeterministic || portablePdbToEmbed != null)
             {
-                debugDirectoryBuilder = new DebugDirectoryBuilder();
+                debugDirectoryBuilder = new DebugDirectoryBuilder(PooledBlobBuilder.GetInstance());
                 if (pdbPathOpt != null)
                 {
                     string paddedPath = isDeterministic ? pdbPathOpt : PadPdbPath(pdbPathOpt);
@@ -285,11 +277,7 @@ namespace Microsoft.Cci
                 peIdProvider,
                 metadataOnly && !context.IncludePrivateMembers);
 
-            // This needs to force the backing builder to zero due to the issue writing COFF
-            // headers. Can remove once this issue is fixed and we've moved to SRM with the 
-            // fix
-            // https://github.com/dotnet/runtime/issues/99244
-            emitBuilders.PortableExecutableBlobBuilder = PooledBlobBuilder.GetInstance(zero: true);
+            emitBuilders.PortableExecutableBlobBuilder = PooledBlobBuilder.GetInstance();
             var peContentId = peBuilder.Serialize(emitBuilders.PortableExecutableBlobBuilder, out Blob mvidSectionFixup);
 
             PatchModuleVersionIds(mvidFixup, mvidSectionFixup, mvidStringFixup, peContentId.Guid);

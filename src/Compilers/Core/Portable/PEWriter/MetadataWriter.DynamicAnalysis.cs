@@ -52,7 +52,7 @@ namespace Microsoft.Cci
             // Each document has a unique guid:
             const int guidSize = 16;
             _guids = new Dictionary<Guid, GuidHandle>(documentCountEstimate);
-            _guidWriter = new BlobBuilder(guidSize * documentCountEstimate);
+            _guidWriter = PooledBlobBuilder.GetInstance(guidSize * documentCountEstimate);
 
             _documentTable = new List<DocumentRow>(documentCountEstimate);
             _documentIndex = new Dictionary<DebugSourceDocument, int>(documentCountEstimate);
