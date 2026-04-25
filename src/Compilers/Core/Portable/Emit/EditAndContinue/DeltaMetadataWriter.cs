@@ -74,7 +74,7 @@ namespace Microsoft.CodeAnalysis.Emit
             DefinitionMap definitionMap,
             CancellationToken cancellationToken)
             : base(metadata: MakeTablesBuilder(previousGeneration),
-                   debugMetadataOpt: (context.Module.DebugInformationFormat == DebugInformationFormat.PortablePdb) ? new MetadataBuilder() : null,
+                   debugMetadataOpt: (context.Module.DebugInformationFormat == DebugInformationFormat.PortablePdb) ? PooledMetadataBuilder.GetInstance() : null,
                    dynamicAnalysisDataWriterOpt: null,
                    context: context,
                    messageProvider: messageProvider,

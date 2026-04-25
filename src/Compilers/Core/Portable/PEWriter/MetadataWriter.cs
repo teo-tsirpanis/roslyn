@@ -1,4 +1,4 @@
-// Licensed to the .NET Foundation under one or more agreements.
+﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -1737,13 +1737,12 @@ namespace Microsoft.Cci
                 metadata.GetType().GetField("_customAttributeTableNeedsSorting", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(metadata, false);
             }
 
-            // TODO (https://github.com/dotnet/roslyn/issues/3905):
-            // InterfaceImpl table emitted by Roslyn is not compliant with ECMA spec.
-            // Once fixed enable validation in DEBUG builds.
-            var rootBuilder = new MetadataRootBuilder(metadata, module.SerializationProperties.TargetRuntimeVersion, suppressValidation: true);
+            var rootBuilder = GetRootBuilder(out var pooledBuilderToFree);
 
             rootBuilder.Serialize(metadataBuilder, methodBodyStreamRva: 0, mappedFieldDataStreamRva: 0);
             metadataSizes = rootBuilder.Sizes;
+
+            PooledMetadataBuilder.Free(pooledBuilderToFree);
 
             try
             {
@@ -1764,10 +1763,13 @@ namespace Microsoft.Cci
                 var portablePdbBuilder = GetPortablePdbBuilder(
                     typeSystemRowCounts,
                     debugEntryPoint: default(MethodDefinitionHandle),
-                    deterministicIdProviderOpt: null);
+                    deterministicIdProviderOpt: null,
+                    out pooledBuilderToFree);
 
                 using var portablePdbBlob = PooledBlobBuilder.GetInstance();
                 portablePdbBuilder.Serialize(portablePdbBlob);
+
+                PooledMetadataBuilder.Free(pooledBuilderToFree);
 
                 try
                 {
@@ -1871,16 +1873,28 @@ namespace Microsoft.Cci
         {
         }
 
-        public MetadataRootBuilder GetRootBuilder()
+        /// <summary>
+        /// Creates a <see cref="MetadataRootBuilder"/> for the metadata being written, and releases ownership of the pooled <see cref="MetadataWriter"/>.
+        /// </summary>
+        /// <param name="pooledBuilderToFree">The pooled <see cref="MetadataBuilder"/> that was held by this instance. You must pass it to
+        /// <see cref="PooledMetadataBuilder.Free"/> after you have finished working with the returned <see cref="MetadataRootBuilder"/>.</param>
+        public MetadataRootBuilder GetRootBuilder(out MetadataBuilder pooledBuilderToFree)
         {
             // TODO (https://github.com/dotnet/roslyn/issues/3905):
             // InterfaceImpl table emitted by Roslyn is not compliant with ECMA spec.
             // Once fixed enable validation in DEBUG builds.
+            pooledBuilderToFree = metadata;
             return new MetadataRootBuilder(metadata, module.SerializationProperties.TargetRuntimeVersion, suppressValidation: true);
         }
 
-        public PortablePdbBuilder GetPortablePdbBuilder(ImmutableArray<int> typeSystemRowCounts, MethodDefinitionHandle debugEntryPoint, Func<IEnumerable<Blob>, BlobContentId> deterministicIdProviderOpt)
+        /// <summary>
+        /// Creates a <see cref="PortablePdbBuilder"/> for the portable PDB being weitten, and releases ownership of the pooled <see cref="MetadataWriter"/>.
+        /// </summary>
+        /// <param name="pooledBuilderToFree">The pooled <see cref="MetadataBuilder"/> that was held by this instance. You must pass it to
+        /// <see cref="PooledMetadataBuilder.Free"/> after you have finished working with the returned <see cref="PortablePdbBuilder"/>.</param>
+        public PortablePdbBuilder GetPortablePdbBuilder(ImmutableArray<int> typeSystemRowCounts, MethodDefinitionHandle debugEntryPoint, Func<IEnumerable<Blob>, BlobContentId> deterministicIdProviderOpt, out MetadataBuilder pooledBuilderToFree)
         {
+            pooledBuilderToFree = _debugMetadataOpt;
             return new PortablePdbBuilder(_debugMetadataOpt, typeSystemRowCounts, debugEntryPoint, deterministicIdProviderOpt);
         }
 

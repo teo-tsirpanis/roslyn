@@ -1,4 +1,4 @@
-// Licensed to the .NET Foundation under one or more agreements.
+﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -157,7 +157,7 @@ namespace Microsoft.Cci
             nativePdbWriterOpt = null;
 
             ushort portablePdbVersion = 0;
-            var metadataRootBuilder = mdWriter.GetRootBuilder();
+            var metadataRootBuilder = mdWriter.GetRootBuilder(out var metadataBuilderToFree);
 
             var peHeaderBuilder = new PEHeaderBuilder(
                 machine: properties.Machine,
@@ -200,9 +200,10 @@ namespace Microsoft.Cci
                     null;
 
                 emitBuilders.PortablePdbBlobBuilder = PooledBlobBuilder.GetInstance();
-                var portablePdbBuilder = mdWriter.GetPortablePdbBuilder(metadataRootBuilder.Sizes.RowCounts, debugEntryPointHandle, portablePdbIdProvider);
+                var portablePdbBuilder = mdWriter.GetPortablePdbBuilder(metadataRootBuilder.Sizes.RowCounts, debugEntryPointHandle, portablePdbIdProvider, out var pdbMetadataBuilderToFree);
                 pdbContentId = portablePdbBuilder.Serialize(emitBuilders.PortablePdbBlobBuilder);
                 portablePdbVersion = portablePdbBuilder.FormatVersion;
+                PooledMetadataBuilder.Free(pdbMetadataBuilderToFree);
 
                 if (getPortablePdbStreamOpt == null)
                 {
@@ -298,6 +299,7 @@ namespace Microsoft.Cci
             }
 
             emitBuilders.Free();
+            PooledMetadataBuilder.Free(metadataBuilderToFree);
             return true;
         }
 

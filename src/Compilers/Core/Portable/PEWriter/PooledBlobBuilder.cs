@@ -12,7 +12,7 @@ namespace Microsoft.Cci
     internal sealed class PooledBlobBuilder : BlobBuilder, IDisposable
     {
         private const int PoolSize = 128;
-        private const int PoolChunkSize = 1024;
+        private const int PoolChunkSize = 8000;
 
         private static readonly ObjectPool<PooledBlobBuilder> s_chunkPool = new ObjectPool<PooledBlobBuilder>(() => new PooledBlobBuilder(), PoolSize);
 
@@ -28,7 +28,7 @@ namespace Microsoft.Cci
         public static PooledBlobBuilder GetInstance(int minimalSize = 0)
         {
             var builder = s_chunkPool.Allocate();
-            builder.Buffer = ArrayPool<byte>.Shared.Rent(minimalSize <= 0 ? PoolChunkSize : minimalSize);
+            builder.Buffer = ArrayPool<byte>.Shared.Rent(minimalSize <= 0 ? 256 : minimalSize);
             return builder;
         }
 
