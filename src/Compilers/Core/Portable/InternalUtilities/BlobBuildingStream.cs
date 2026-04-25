@@ -7,8 +7,7 @@ using System.Collections.Immutable;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection.Metadata;
-using Microsoft.CodeAnalysis.PooledObjects;
-using Microsoft.CodeAnalysis;
+using Microsoft.Cci;
 
 namespace Roslyn.Utilities
 {
@@ -17,8 +16,7 @@ namespace Roslyn.Utilities
     /// </summary>
     internal sealed class BlobBuildingStream : Stream
     {
-        private static readonly ObjectPool<BlobBuildingStream> s_pool = new ObjectPool<BlobBuildingStream>(() => new BlobBuildingStream());
-        private readonly BlobBuilder _builder;
+        private readonly PooledBlobBuilder _builder = PooledBlobBuilder.GetInstance(ChunkSize);
 
         /// <summary>
         /// The chunk size to be used by the underlying BlobBuilder.
@@ -38,8 +36,6 @@ namespace Roslyn.Utilities
         ///   (e.g. Syntax.xml.Generated.vb is 390KB compressed!) and those are actually
         ///   attractive candidates for embedding, so we don't want to discount the large
         ///   case too heavily.)
-        ///
-        /// * We pool the outer BlobBuildingStream but only retain the first allocated chunk.
         /// </remarks>
         public const int ChunkSize = 32 * 1024;
 
@@ -48,22 +44,17 @@ namespace Roslyn.Utilities
         public override bool CanSeek => false;
         public override long Length => _builder.Count;
 
-        public static BlobBuildingStream GetInstance()
-        {
-            return s_pool.Allocate();
-        }
-
-        private BlobBuildingStream()
-        {
-            // NOTE: We pool the wrapping BlobBuildingStream, but not individual chunks.
-            // The first chunk will be reused, but any further chunks will be freed when we're done building blob.
-            _builder = new BlobBuilder(ChunkSize);
-        }
-
         public override void Write(byte[] buffer, int offset, int count)
         {
             _builder.WriteBytes(buffer, offset, count);
         }
+
+#if NET
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            _builder.WriteBytes(buffer);
+        }
+#endif
 
         public override void WriteByte(byte value)
         {
@@ -87,8 +78,7 @@ namespace Roslyn.Utilities
 
         public void Free()
         {
-            _builder.Clear();  // frees all but first chunk
-            s_pool.Free(this); // return first chunk to pool
+            _builder.Free();
         }
 
         public override void Flush()
