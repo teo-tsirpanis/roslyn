@@ -1,4 +1,5 @@
 Microsoft.CodeAnalysis.INamedTypeSymbol.TypeLayout.get -> Microsoft.CodeAnalysis.TypeLayout
+const Microsoft.CodeAnalysis.WellKnownDiagnosticTags.RequiresUnconditionalSuppressMessageAttribute = "RequiresUnconditionalSuppressMessageAttribute" -> string!
 Microsoft.CodeAnalysis.Text.SourceHashAlgorithm.Sha384 = 3 -> Microsoft.CodeAnalysis.Text.SourceHashAlgorithm
 Microsoft.CodeAnalysis.Text.SourceHashAlgorithm.Sha512 = 4 -> Microsoft.CodeAnalysis.Text.SourceHashAlgorithm
 Microsoft.CodeAnalysis.TypeLayout

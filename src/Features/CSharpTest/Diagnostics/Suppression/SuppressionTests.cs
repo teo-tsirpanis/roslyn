@@ -2627,6 +2627,138 @@ public abstract partial class CSharpSuppressionTests : AbstractSuppressionDiagno
         }
     }
 
+    public abstract class CSharpLocalUnconditionalSuppressMessageSuppressionTests : CSharpSuppressionTests
+    {
+        protected sealed override int CodeActionIndex => 1;
+
+        [Trait(Traits.Feature, Traits.Features.CodeActionsSuppression)]
+        public sealed class UserInfoDiagnosticSuppressionTests : CSharpLocalUnconditionalSuppressMessageSuppressionTests
+        {
+            private sealed class UserDiagnosticAnalyzer : DiagnosticAnalyzer
+            {
+                private readonly DiagnosticDescriptor _descriptor =
+                    new("InfoDiagnostic", "InfoDiagnostic", "InfoDiagnostic", "InfoDiagnostic", DiagnosticSeverity.Info, isEnabledByDefault: true, customTags: [WellKnownDiagnosticTags.RequiresUnconditionalSuppressMessageAttribute]);
+
+                public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => [_descriptor];
+
+                public override void Initialize(AnalysisContext context)
+                    => context.RegisterSyntaxNodeAction(AnalyzeNode, SyntaxKind.ClassDeclaration, SyntaxKind.NamespaceDeclaration, SyntaxKind.MethodDeclaration, SyntaxKind.ExtensionBlockDeclaration);
+
+                public void AnalyzeNode(SyntaxNodeAnalysisContext context)
+                {
+                    switch (context.Node.Kind())
+                    {
+                        case SyntaxKind.ClassDeclaration:
+                            var classDecl = (ClassDeclarationSyntax)context.Node;
+                            context.ReportDiagnostic(Diagnostic.Create(_descriptor, classDecl.Identifier.GetLocation()));
+                            break;
+
+                        case SyntaxKind.NamespaceDeclaration:
+                            var ns = (NamespaceDeclarationSyntax)context.Node;
+                            context.ReportDiagnostic(Diagnostic.Create(_descriptor, ns.Name.GetLocation()));
+                            break;
+
+                        case SyntaxKind.MethodDeclaration:
+                            var method = (MethodDeclarationSyntax)context.Node;
+                            context.ReportDiagnostic(Diagnostic.Create(_descriptor, method.Identifier.GetLocation()));
+                            break;
+
+                        case SyntaxKind.ExtensionBlockDeclaration:
+                            var extensionBlock = (ExtensionBlockDeclarationSyntax)context.Node;
+                            context.ReportDiagnostic(Diagnostic.Create(_descriptor, extensionBlock.Keyword.GetLocation()));
+                            break;
+
+                    }
+                }
+            }
+
+            internal override Tuple<DiagnosticAnalyzer, IConfigurationFixProvider> CreateDiagnosticProviderAndFixer(Workspace workspace)
+            {
+                return new Tuple<DiagnosticAnalyzer, IConfigurationFixProvider>(
+                    new UserDiagnosticAnalyzer(), new CSharpSuppressionCodeFixProvider());
+            }
+
+            [Fact]
+            public async Task TestSuppressionOnSimpleType()
+            {
+                var expected = $$"""
+
+                    namespace MyNamespace
+                    {
+                        using System;
+
+                        // Some trivia
+                        /* More Trivia */
+                        [System.Diagnostics.CodeAnalysis.UnconditionalSuppressMessage("InfoDiagnostic", "InfoDiagnostic:InfoDiagnostic", Justification = "{{FeaturesResources.Pending}}")]
+                        class Class
+                        {
+                            int Method()
+                            {
+                                int x = 0;
+                            }
+                        }
+                    }
+
+                    namespace System.Diagnostics.CodeAnalysis
+                    {
+                        [AttributeUsage(AttributeTargets.All, Inherited = false, AllowMultiple = true)]
+                        internal sealed class UnconditionalSuppressMessageAttribute : Attribute
+                        {
+                            public UnconditionalSuppressMessageAttribute(string category, string checkId)
+                            {
+                                Category = category;
+                                CheckId = checkId;
+                            }
+                            public string Category { get; }
+                            public string CheckId { get; }
+                            public string? Justification { get; set; }
+                            public string? Scope { get; set; }
+                            public string? Target { get; set; }
+                        }
+                    }
+                    """;
+                await TestAsync("""
+                    
+                    namespace MyNamespace
+                    {
+                        using System;
+                    
+                        // Some trivia
+                        /* More Trivia */ [|class Class|]
+                        {
+                            int Method()
+                            {
+                                int x = 0;
+                            }
+                        }
+                    }
+                    
+                    namespace System.Diagnostics.CodeAnalysis
+                    {
+                        [AttributeUsage(AttributeTargets.All, Inherited = false, AllowMultiple = true)]
+                        internal sealed class UnconditionalSuppressMessageAttribute : Attribute
+                        {
+                            public UnconditionalSuppressMessageAttribute(string category, string checkId)
+                            {
+                                Category = category;
+                                CheckId = checkId;
+                            }
+                            public string Category { get; }
+                            public string CheckId { get; }
+                            public string? Justification { get; set; }
+                            public string? Scope { get; set; }
+                            public string? Target { get; set; }
+                        }
+                    }
+                    """, expected);
+
+                // Also verify that the added attribute does indeed suppress the diagnostic.
+                expected = expected.Replace("class Class", "[|class Class|]");
+                await TestMissingAsync(expected);
+            }
+        }
+    }
+
     #endregion
 
     #region NoLocation Diagnostics tests

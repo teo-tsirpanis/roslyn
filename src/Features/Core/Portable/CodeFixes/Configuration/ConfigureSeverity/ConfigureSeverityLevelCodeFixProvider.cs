@@ -36,10 +36,12 @@ internal sealed partial class ConfigureSeverityLevelCodeFixProvider : IConfigura
     {
     }
 
-    // We only offer fix for configurable diagnostics.
+    // We only offer fix for configurable diagnostics that do not require [UnconditionalSuppressMessage].
     // Also skip suppressed diagnostics defensively, though the code fix engine should ideally never call us for suppressed diagnostics.
     public bool IsFixableDiagnostic(Diagnostic diagnostic)
-        => !diagnostic.IsSuppressed && !SuppressionHelpers.IsNotConfigurableDiagnostic(diagnostic);
+        => !diagnostic.IsSuppressed
+        && !SuppressionHelpers.IsNotConfigurableDiagnostic(diagnostic)
+        && !SuppressionHelpers.IsRequiresUnconditionalSuppressMessageAttributeDiagnostic(diagnostic);
 
     public FixAllProvider? GetFixAllProvider()
         => null;

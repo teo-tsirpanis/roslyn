@@ -36,10 +36,12 @@ internal sealed partial class ConfigureCodeStyleOptionCodeFixProvider : IConfigu
 
     public bool IsFixableDiagnostic(Diagnostic diagnostic)
     {
-        // We only offer fix for configurable code style diagnostics which have one of more editorconfig based storage locations.
+        // We only offer fix for configurable code style diagnostics which do not require [UnconditionalSuppressMessage], and have one of
+        // more editorconfig based storage locations.
         // Also skip suppressed diagnostics defensively, though the code fix engine should ideally never call us for suppressed diagnostics.
         if (diagnostic.IsSuppressed ||
             SuppressionHelpers.IsNotConfigurableDiagnostic(diagnostic) ||
+            SuppressionHelpers.IsRequiresUnconditionalSuppressMessageAttributeDiagnostic(diagnostic) ||
             diagnostic.Location.SourceTree == null)
         {
             return false;
